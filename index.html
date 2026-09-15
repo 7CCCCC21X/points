@@ -1,0 +1,1717 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Predict 每周积分排名</title>
+<style>
+:root{color-scheme:dark;--bg:#0c1220;--card:#151f31;--line:#2a3850;--text:#edf3ff;--muted:#aab9ce;--accent:#76e0c3}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif}
+main{max-width:1280px;margin:auto;padding:28px 20px}h1{font-size:28px;margin:4px 0}h2{font-size:17px;margin:0 0 12px}
+p{margin:8px 0}.muted,small{color:var(--muted)}.tag{color:var(--accent);letter-spacing:2px;font-size:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin:16px 0}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>label{display:flex;gap:8px;align-items:center}
+input,textarea,select,button{font:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:#0d1626;color:var(--text)}
+input[type=checkbox]{accent-color:var(--accent)}input[type=number]{width:95px}input[type=password]{width:270px;max-width:100%}
+textarea{width:100%;min-height:100px;resize:vertical;margin:12px 0}button{cursor:pointer}button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#10231f;font-weight:700}button:disabled{opacity:.45;cursor:not-allowed}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.stat strong{display:block;font-size:26px}#status{color:var(--accent);white-space:pre-wrap}#storage{color:#ffce86}
+.tablebox{max-height:580px;overflow:auto;margin-top:15px;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;min-width:1050px;width:100%}th,td{padding:11px 13px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:#1c2940;z-index:1}td.num,th.num{text-align:right}td.addr{font-family:ui-monospace,monospace;font-size:12px}
+#log{white-space:pre-wrap;overflow:auto;max-height:220px;color:var(--muted);margin:10px 0 0}#pager{margin-top:12px;justify-content:space-between}
+@media(max-width:680px){main{padding:18px 12px}h1{font-size:23px}.stats{gap:6px}.stat{padding:10px}.stat strong{font-size:22px}.card{padding:13px}.row input[type=password]{width:100%}}
+</style>
+</head>
+<body>
+<main>
+<div class="tag">PREDICT / WEEKLY POINTS</div>
+<h1>每周积分排名与导出</h1>
+<p class="muted">GitHub 保存代码 · Vercel 提供网页与只读代理 · 非官方工具</p>
+
+<div class="card">
+  <h2>① 添加地址 / 采集累计总榜地址</h2>
+
+  <div class="row">
+    <label>
+      访问密码
+      <input id="password" type="password" autocomplete="off"
+        placeholder="Vercel 中的 SITE_PASSWORD" data-lock>
+    </label>
+
+    <label>
+      本次最多采集
+      <input id="maxPages" type="number"
+        min="1" max="500" value="50" data-lock>
+      页
+    </label>
+
+    <button id="collect" data-lock>
+      采集 / 继续采集总榜地址
+    </button>
+
+    <button id="resetCursor" data-lock>
+      重置总榜游标
+    </button>
+  </div>
+
+  <textarea id="addresses"
+    placeholder="粘贴 0x 开头的钱包地址；每行一个，也可以粘贴包含地址的文本。只查询已有地址不需要官方 API Key。"
+    data-lock></textarea>
+
+  <div class="row">
+    <button id="add" data-lock>添加地址</button>
+    <button id="import" data-lock>导入地址文件 / 断点 JSON</button>
+    <input id="file" type="file" accept=".txt,.csv,.json" hidden>
+    <button id="clear" data-lock>清空本机数据</button>
+  </div>
+
+  <p class="muted">
+    总榜功能按前版接口适配，权限与分页参数待实测；
+    接口不可用时可导入地址。重置游标不会删除已查询的积分。
+  </p>
+</div>
+
+<div class="card">
+  <h2>② 查询历史周积分</h2>
+
+  <div class="row">
+    <button id="query" class="primary" data-lock>
+      查询 / 继续未完成地址
+    </button>
+
+    <button id="refresh" data-lock>
+      重新查询全部地址
+    </button>
+
+    <button id="stop" disabled>停止</button>
+
+    <label>
+      请求间隔
+      <input id="interval" type="number"
+        min="500" max="10000" value="700" data-lock>
+      毫秒
+    </label>
+
+    <button id="backup" data-lock>
+      导出断点 JSON
+    </button>
+  </div>
+
+  <p id="status" role="status">正在读取本机缓存…</p>
+  <p id="coverage" class="muted"></p>
+  <p id="storage"></p>
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <small>已载入地址</small>
+    <strong id="s1">0</strong>
+  </div>
+
+  <div class="stat">
+    <small>查询成功 / 失败</small>
+    <strong id="s2">0 / 0</strong>
+  </div>
+
+  <div class="stat">
+    <small>所选周可排名地址</small>
+    <strong id="s3">0</strong>
+  </div>
+</div>
+
+<div class="card">
+  <h2>③ 选择周、查看排名、下载 CSV</h2>
+
+  <div class="row">
+    <select id="week" aria-label="选择周">
+      <option value="latest">最新已结算周</option>
+    </select>
+
+    <input id="search"
+      placeholder="搜索地址或名称"
+      aria-label="搜索地址或名称">
+
+    <label>
+      <input id="settled" type="checkbox" checked>
+      仅显示可排名记录
+    </label>
+
+    <button id="csv" data-lock>
+      导出本周 CSV（全部地址）
+    </button>
+  </div>
+
+  <p class="muted">
+    名次是当前样本内的周排名，不是官方全网周榜；
+    只给查询成功、明确已结算且积分有效的记录排名。同分并列。
+  </p>
+
+  <div class="tablebox">
+    <table>
+      <thead>
+        <tr>
+          <th>样本周排名</th>
+          <th>名称</th>
+          <th>钱包地址</th>
+          <th class="num">周积分</th>
+          <th class="num">推荐积分</th>
+          <th class="num">累计总积分*</th>
+          <th>状态</th>
+          <th>采集时间（北京时间）</th>
+        </tr>
+      </thead>
+
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <div id="pager" class="row">
+    <button id="prev">上一页</button>
+    <span id="pageInfo"></span>
+    <button id="next">下一页</button>
+  </div>
+
+  <p class="muted">
+    *累计积分取最近一次地址查询的 leaderboard 字段，
+    没有则使用采集总榜的值；不是该历史周末的累计值。
+    推荐积分单列，不再次加进周积分，也不乘 1.1。
+  </p>
+</div>
+
+<details class="card">
+  <summary>运行日志与说明</summary>
+
+  <p class="muted">
+    查询期间保持页面打开。
+    数据只缓存在当前浏览器，不在 Vercel 保存；
+    换浏览器前请导出断点 JSON。
+    周积分来源为第三方 Predalpha，可能延迟、限流或不可用。
+  </p>
+
+  <pre id="log"></pre>
+</details>
+</main>
+
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+const accounts = new Map();
+
+let discovery = {
+  cursor: '',
+  pages: 0,
+  finished: false,
+  seen: []
+};
+
+let task = null;
+let db = null;
+let page = 1;
+let lastRows = [];
+let activeWeek = 0;
+
+const logs = [];
+
+const validAddress = x =>
+  typeof x === 'string' &&
+  /^0x[0-9a-fA-F]{40}$/.test(x);
+
+const escapeHTML = x =>
+  String(x ?? '').replace(
+    /[&<>"']/g,
+    c => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[c])
+  );
+
+const message = text => {
+  $('status').textContent = text;
+};
+
+function log(text) {
+  logs.push(
+    `${new Date().toLocaleTimeString('zh-CN')}  ${text}`
+  );
+
+  if (logs.length > 120) {
+    logs.shift();
+  }
+
+  $('log').textContent = logs.join('\n');
+}
+
+// 把 JSON 中的数字 token 保留为字符串。
+// 积分比较、导出不经过浮点取整。
+function parseJSON(text) {
+  return JSON.parse(
+    text.replace(/^\uFEFF/, '').replace(
+      /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+      token =>
+        token[0] === '"'
+          ? token
+          : JSON.stringify(token)
+    )
+  );
+}
+
+function decimal(value) {
+  if (
+    value == null ||
+    typeof value === 'boolean'
+  ) {
+    return null;
+  }
+
+  const raw = String(value).trim();
+
+  if (raw.length > 200) {
+    return null;
+  }
+
+  const m = raw.match(
+    /^([+-]?)(\d+)(?:\.(\d*))?(?:e([+-]?\d+))?$/i
+  );
+
+  if (
+    !m ||
+    Math.abs(Number(m[4] || 0)) > 100
+  ) {
+    return null;
+  }
+
+  let s =
+    (m[3] || '').length -
+    Number(m[4] || 0);
+
+  let n =
+    BigInt(m[2] + (m[3] || '')) *
+    (m[1] === '-' ? -1n : 1n);
+
+  if (s < 0) {
+    n *= 10n ** BigInt(-s);
+    s = 0;
+  }
+
+  while (
+    s &&
+    n % 10n === 0n
+  ) {
+    n /= 10n;
+    s--;
+  }
+
+  return { n, s };
+}
+
+function numeric(value) {
+  const d = decimal(value);
+
+  if (!d) return null;
+
+  const t = (
+    d.n < 0n ? -d.n : d.n
+  ).toString().padStart(d.s + 1, '0');
+
+  return (
+    (d.n < 0n ? '-' : '') +
+    (
+      d.s
+        ? t.slice(0, -d.s) + '.' + t.slice(-d.s)
+        : t
+    )
+  );
+}
+
+function compare(a, b) {
+  const x = decimal(a);
+  const y = decimal(b);
+  const s = Math.max(x.s, y.s);
+
+  const p =
+    x.n * 10n ** BigInt(s - x.s);
+
+  const q =
+    y.n * 10n ** BigInt(s - y.s);
+
+  return p > q ? 1 : p < q ? -1 : 0;
+}
+
+function format(value) {
+  if (value == null) return '—';
+
+  const [a, b] =
+    String(value).split('.');
+
+  return (
+    a.replace(
+      /\B(?=(\d{3})+(?!\d))/g,
+      ','
+    ) +
+    (b ? '.' + b.slice(0, 4) : '')
+  );
+}
+
+function weeksOf(list) {
+  if (!Array.isArray(list)) {
+    throw new Error(
+      '响应缺少 weeks 数组，不能当作 0 分。'
+    );
+  }
+
+  const seen = new Set();
+
+  return list.map(w => {
+    const week = Number(w?.week);
+
+    if (
+      !Number.isInteger(week) ||
+      week < 1 ||
+      week > 10000 ||
+      seen.has(week)
+    ) {
+      throw new Error(
+        '周号无效或重复。'
+      );
+    }
+
+    seen.add(week);
+
+    return {
+      week,
+      points: numeric(w.points),
+      referral_points: numeric(w.referral_points),
+
+      calculated:
+        w.calculated === true ||
+        w.calculated === 'true'
+          ? true
+          : w.calculated === false ||
+            w.calculated === 'false'
+            ? false
+            : null,
+
+      week_start: w.week_start ?? null,
+      week_end: w.week_end ?? null
+    };
+  });
+}
+
+function accountOf(raw) {
+  const x =
+    typeof raw === 'string'
+      ? { address: raw }
+      : raw;
+
+  const address = String(
+    x?.address ??
+    x?.wallet ??
+    x?.wallet_address ??
+    ''
+  ).trim();
+
+  if (!validAddress(address)) {
+    throw new Error(
+      '记录缺少有效钱包地址。'
+    );
+  }
+
+  return {
+    address,
+
+    name: String(
+      x.name ??
+      x.username ??
+      ''
+    ).slice(0, 160),
+
+    totalPoints: numeric(
+      x.totalPoints ??
+      x.total_points
+    ),
+
+    weeks: [],
+    status: 'pending',
+    error: '',
+    fetchedAt: ''
+  };
+}
+
+function merge(a) {
+  const key =
+    a.address.toLowerCase();
+
+  const old =
+    accounts.get(key);
+
+  if (!old) {
+    accounts.set(key, a);
+  } else {
+    if (a.name) {
+      old.name = a.name;
+    }
+
+    if (a.totalPoints != null) {
+      old.totalPoints = a.totalPoints;
+    }
+  }
+}
+
+function snapshot() {
+  return {
+    app: 'predict-weekly-vercel',
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    discovery,
+    accounts: [...accounts.values()]
+  };
+}
+
+function restore(data) {
+  if (
+    data?.app !== 'predict-weekly-vercel' ||
+    !Array.isArray(data.accounts)
+  ) {
+    throw new Error(
+      '不是本版本的断点文件。'
+    );
+  }
+
+  const restored =
+    data.accounts.map(raw => {
+      const a = accountOf(raw);
+
+      a.weeks = weeksOf(raw.weeks);
+
+      a.status =
+        ['ok', 'error'].includes(raw.status)
+          ? raw.status
+          : 'pending';
+
+      a.error = String(
+        raw.error || ''
+      ).slice(0, 500);
+
+      a.fetchedAt =
+        typeof raw.fetchedAt === 'string'
+          ? raw.fetchedAt
+          : '';
+
+      return a;
+    });
+
+  const d = data.discovery;
+
+  if (
+    d &&
+    (
+      typeof d.cursor !== 'string' ||
+      d.cursor.length > 4096 ||
+      !Array.isArray(d.seen) ||
+      d.seen.some(
+        x =>
+          typeof x !== 'string' ||
+          x.length > 4096
+      )
+    )
+  ) {
+    throw new Error(
+      '断点分页信息无效。'
+    );
+  }
+
+  accounts.clear();
+
+  restored.forEach(a => {
+    accounts.set(
+      a.address.toLowerCase(),
+      a
+    );
+  });
+
+  discovery = d
+    ? {
+        cursor: d.cursor,
+        pages: Number(d.pages) || 0,
+        finished: d.finished === true,
+        seen: d.seen
+      }
+    : {
+        cursor: '',
+        pages: 0,
+        finished: false,
+        seen: []
+      };
+}
+
+async function save() {
+  if (!db) return;
+
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(
+        'cache',
+        'readwrite'
+      );
+
+      tx.objectStore('cache').put(
+        snapshot(),
+        'snapshot'
+      );
+
+      tx.oncomplete = resolve;
+
+      tx.onerror = tx.onabort = () => {
+        reject(
+          tx.error ||
+          new Error('保存失败')
+        );
+      };
+    });
+
+    $('storage').textContent = '';
+
+  } catch {
+    $('storage').textContent =
+      '本机缓存写入失败，请使用“导出断点 JSON”保存进度。';
+  }
+}
+
+function render() {
+  const all = [...accounts.values()];
+  const weeks = new Set();
+
+  let latest = 0;
+
+  for (const a of all) {
+    for (const w of a.weeks) {
+      weeks.add(w.week);
+
+      if (
+        a.status === 'ok' &&
+        w.calculated === true
+      ) {
+        latest = Math.max(
+          latest,
+          w.week
+        );
+      }
+    }
+  }
+
+  const selected =
+    $('week').value;
+
+  $('week').innerHTML =
+    '<option value="latest">最新已结算周</option>' +
+    [...weeks]
+      .sort((a, b) => b - a)
+      .map(
+        w =>
+          `<option value="${w}">第 ${w} 周</option>`
+      )
+      .join('');
+
+  $('week').value =
+    selected === 'latest' ||
+    weeks.has(Number(selected))
+      ? selected
+      : 'latest';
+
+  activeWeek =
+    $('week').value === 'latest'
+      ? latest
+      : Number($('week').value);
+
+  lastRows = all.map(a => {
+    const w = a.weeks.find(
+      w => w.week === activeWeek
+    );
+
+    const eligible =
+      a.status === 'ok' &&
+      w?.calculated === true &&
+      w.points !== null;
+
+    const state =
+      a.status === 'error'
+        ? '查询失败'
+        : a.status !== 'ok'
+          ? '待查询'
+          : !w
+            ? '该周无记录'
+            : w.calculated === false
+              ? '未结算'
+              : w.calculated !== true
+                ? '结算状态未知'
+                : w.points === null
+                  ? '积分无效'
+                  : '已结算';
+
+    return {
+      a,
+      w,
+      eligible,
+      state,
+      rank: ''
+    };
+
+  }).sort((x, y) =>
+    Number(y.eligible) -
+    Number(x.eligible) ||
+
+    (
+      x.eligible && y.eligible
+        ? compare(y.w.points, x.w.points)
+        : 0
+    ) ||
+
+    x.a.address.localeCompare(y.a.address)
+  );
+
+  let rank = 0;
+  let previous = null;
+  let ranked = 0;
+
+  for (const r of lastRows) {
+    if (r.eligible) {
+      ranked++;
+
+      if (
+        previous === null ||
+        compare(r.w.points, previous) !== 0
+      ) {
+        rank = ranked;
+      }
+
+      r.rank = rank;
+      previous = r.w.points;
+    }
+  }
+
+  $('s1').textContent =
+    all.length.toLocaleString();
+
+  $('s2').textContent =
+    `${all.filter(a => a.status === 'ok').length} / ` +
+    `${all.filter(a => a.status === 'error').length}`;
+
+  $('s3').textContent =
+    ranked.toLocaleString();
+
+  $('coverage').textContent =
+    `总榜已接收 ${discovery.pages} 页；` +
+    (
+      discovery.finished
+        ? '已到接口游标末尾，仍不代表全网历史完整覆盖'
+        : '尚未确认采集完成'
+    ) +
+    '。当前选择：' +
+    (
+      activeWeek
+        ? '第 ' + activeWeek + ' 周'
+        : '暂无已结算周'
+    ) +
+    '。';
+
+  const query =
+    $('search').value
+      .trim()
+      .toLowerCase();
+
+  const filtered = lastRows.filter(r =>
+    (
+      !$('settled').checked ||
+      r.eligible
+    ) &&
+    (
+      !query ||
+      `${r.a.address} ${r.a.name}`
+        .toLowerCase()
+        .includes(query)
+    )
+  );
+
+  const pages = Math.max(
+    1,
+    Math.ceil(filtered.length / 100)
+  );
+
+  page = Math.max(
+    1,
+    Math.min(page, pages)
+  );
+
+  $('tbody').innerHTML = filtered
+    .slice(
+      (page - 1) * 100,
+      page * 100
+    )
+    .map(r => {
+      const a = r.a;
+      const valid = a.status === 'ok';
+      const date = new Date(a.fetchedAt);
+
+      const time = Number.isNaN(+date)
+        ? '—'
+        : date.toLocaleString(
+            'zh-CN',
+            {
+              timeZone: 'Asia/Shanghai',
+              hour12: false
+            }
+          );
+
+      return `
+        <tr>
+          <td>${r.rank || '—'}</td>
+          <td>${escapeHTML(a.name || '—')}</td>
+          <td class="addr">${a.address}</td>
+
+          <td class="num"
+            title="${escapeHTML(valid ? r.w?.points : '')}">
+            ${valid ? format(r.w?.points) : '—'}
+          </td>
+
+          <td class="num">
+            ${valid ? format(r.w?.referral_points) : '—'}
+          </td>
+
+          <td class="num">
+            ${format(a.totalPoints)}
+          </td>
+
+          <td title="${escapeHTML(a.error)}">
+            ${r.state}
+          </td>
+
+          <td>${time}</td>
+        </tr>
+      `;
+    })
+    .join('') ||
+
+    `<tr>
+      <td colspan="8">
+        没有符合筛选条件的记录。
+        可取消“仅显示可排名记录”检查缺失或失败。
+      </td>
+    </tr>`;
+
+  $('pageInfo').textContent =
+    `${page} / ${pages} 页 · ` +
+    `筛选后 ${filtered.length} 条 · ` +
+    '每页 100 条';
+
+  $('prev').disabled = page <= 1;
+  $('next').disabled = page >= pages;
+}
+
+function wait(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const stop = () => {
+      clearTimeout(timer);
+
+      reject(
+        new DOMException(
+          '已停止',
+          'AbortError'
+        )
+      );
+    };
+
+    const timer = setTimeout(() => {
+      signal.removeEventListener(
+        'abort',
+        stop
+      );
+
+      resolve();
+    }, ms);
+
+    if (signal.aborted) {
+      stop();
+    } else {
+      signal.addEventListener(
+        'abort',
+        stop,
+        { once: true }
+      );
+    }
+  });
+}
+
+async function request(action, params, signal) {
+  const url =
+    '/api/weekly?' +
+    new URLSearchParams({
+      action,
+      ...params
+    });
+
+  for (
+    let attempt = 0;
+    attempt < 3;
+    attempt++
+  ) {
+    if (signal.aborted) {
+      throw new DOMException(
+        '已停止',
+        'AbortError'
+      );
+    }
+
+    const ctrl =
+      new AbortController();
+
+    const cancel = () =>
+      ctrl.abort();
+
+    signal.addEventListener(
+      'abort',
+      cancel,
+      { once: true }
+    );
+
+    const timer = setTimeout(
+      cancel,
+      25000
+    );
+
+    let delay =
+      1500 * 2 ** attempt;
+
+    try {
+      const response = await fetch(url, {
+        signal: ctrl.signal,
+        cache: 'no-store',
+
+        headers: {
+          'x-site-password':
+            $('password').value,
+
+          Accept: 'application/json'
+        }
+      });
+
+      const text =
+        await response.text();
+
+      let data;
+
+      try {
+        data = parseJSON(text);
+
+      } catch {
+        throw Object.assign(
+          new Error(
+            '代理返回非 JSON；请检查 api/weekly.js 是否部署。'
+          ),
+          { fatal: true }
+        );
+      }
+
+      if (
+        !response.ok ||
+        data?.success === false
+      ) {
+        const error = Object.assign(
+          new Error(
+            typeof data?.error === 'string'
+              ? data.error
+              : `HTTP ${response.status}`
+          ),
+          {
+            code: response.status,
+
+            fatal: [
+              401,
+              403,
+              503
+            ].includes(response.status)
+          }
+        );
+
+        const retry = Number(
+          response.headers.get(
+            'retry-after'
+          )
+        );
+
+        if (
+          Number.isFinite(retry) &&
+          retry > 0
+        ) {
+          delay = Math.max(
+            delay,
+            retry * 1000
+          );
+        }
+
+        if (delay > 60000) {
+          error.fatal = true;
+
+          error.message +=
+            ' 上游要求等待较久，请稍后手动继续。';
+        }
+
+        throw error;
+      }
+
+      return data;
+
+    } catch (error) {
+      if (signal.aborted) {
+        throw new DOMException(
+          '已停止',
+          'AbortError'
+        );
+      }
+
+      const retryable =
+        error.code === 429 ||
+        error.code >= 500 ||
+        error.name === 'AbortError' ||
+        error instanceof TypeError;
+
+      if (
+        error.fatal ||
+        !retryable ||
+        attempt === 2
+      ) {
+        throw error;
+      }
+
+      log(
+        `${error.message}；` +
+        `${Math.ceil(delay / 1000)} 秒后重试。`
+      );
+
+    } finally {
+      clearTimeout(timer);
+
+      signal.removeEventListener(
+        'abort',
+        cancel
+      );
+    }
+
+    await wait(delay, signal);
+  }
+}
+
+async function run(
+  work,
+  needsPassword = false
+) {
+  if (task) return;
+
+  if (
+    needsPassword &&
+    !$('password').value
+  ) {
+    return message(
+      '请先填写网页访问密码 SITE_PASSWORD。'
+    );
+  }
+
+  task = new AbortController();
+
+  document
+    .querySelectorAll('[data-lock]')
+    .forEach(el => {
+      el.disabled = true;
+    });
+
+  $('stop').disabled = false;
+
+  try {
+    await work(task.signal);
+
+  } catch (error) {
+    message(
+      task.signal.aborted
+        ? '已停止，数据已保留。'
+        : error.message
+    );
+
+    log(error.message);
+
+  } finally {
+    await save();
+    task = null;
+
+    document
+      .querySelectorAll('[data-lock]')
+      .forEach(el => {
+        el.disabled = false;
+      });
+
+    $('stop').disabled = true;
+
+    render();
+  }
+}
+
+const interval = () =>
+  Math.max(
+    500,
+    Math.min(
+      10000,
+      Number($('interval').value) || 700
+    )
+  );
+
+async function collect(signal) {
+  if (discovery.finished) {
+    return message(
+      '已到接口游标末尾；要重新采集，先重置游标。'
+    );
+  }
+
+  const max = Math.max(
+    1,
+    Math.min(
+      500,
+      Number($('maxPages').value) || 50
+    )
+  );
+
+  for (let i = 0; i < max; i++) {
+    message(
+      `读取总榜第 ${discovery.pages + 1} 页…`
+    );
+
+    const data = await request(
+      'leaderboard',
+      {
+        after: discovery.cursor
+      },
+      signal
+    );
+
+    if (
+      !Array.isArray(data.data) ||
+      !Object.hasOwn(data, 'cursor') ||
+      (
+        data.cursor !== null &&
+        typeof data.cursor !== 'string'
+      )
+    ) {
+      throw new Error(
+        '总榜响应不符合 data[] / cursor 结构，已停止。'
+      );
+    }
+
+    const next = data.cursor || '';
+
+    if (
+      next.length > 4096 ||
+      (
+        next &&
+        (
+          next === discovery.cursor ||
+          discovery.seen.includes(next)
+        )
+      )
+    ) {
+      throw new Error(
+        '分页游标重复或无效，采集不完整。'
+      );
+    }
+
+    if (
+      !data.data.length &&
+      next
+    ) {
+      throw new Error(
+        '总榜返回空页但仍有游标，已停止。'
+      );
+    }
+
+    // 整页验证通过后才写入。
+    const batch =
+      data.data.map(accountOf);
+
+    batch.forEach(merge);
+
+    discovery.pages++;
+    discovery.cursor = next;
+    discovery.finished = !next;
+
+    if (next) {
+      discovery.seen.push(next);
+    }
+
+    log(
+      `接收第 ${discovery.pages} 页：` +
+      `${batch.length} 条；` +
+      `现有 ${accounts.size} 个去重地址。`
+    );
+
+    render();
+    await save();
+
+    if (!next) {
+      return message(
+        '已到接口游标末尾。下一步点击“查询 / 继续未完成地址”。'
+      );
+    }
+
+    await wait(
+      interval(),
+      signal
+    );
+  }
+
+  message(
+    '已达到本次采集页数限制，仍有后续页；点击采集按钮继续。'
+  );
+}
+
+async function query(all, signal) {
+  const list = [
+    ...accounts.values()
+  ].filter(
+    a =>
+      all ||
+      a.status !== 'ok'
+  );
+
+  if (!list.length) {
+    return message(
+      '没有需要查询的地址。请先添加地址，或使用“重新查询全部地址”。'
+    );
+  }
+
+  let done = 0;
+  let failures = 0;
+  let streak = 0;
+
+  for (const a of list) {
+    if (signal.aborted) {
+      throw new DOMException(
+        '已停止',
+        'AbortError'
+      );
+    }
+
+    message(
+      `查询 ${done + 1}/${list.length}：${a.address}`
+    );
+
+    try {
+      const json = await request(
+        'points',
+        {
+          address: a.address
+        },
+        signal
+      );
+
+      const body =
+        Array.isArray(json.weeks)
+          ? json
+          : json.data;
+
+      if (
+        !body ||
+        !Array.isArray(body.weeks)
+      ) {
+        throw new Error(
+          '积分响应缺少 weeks 数组。'
+        );
+      }
+
+      const returned =
+        body.address ??
+        body.wallet;
+
+      if (
+        returned != null &&
+        (
+          !validAddress(returned) ||
+          returned.toLowerCase() !==
+            a.address.toLowerCase()
+        )
+      ) {
+        throw new Error(
+          '响应地址与查询地址不一致。'
+        );
+      }
+
+      const weeks =
+        weeksOf(body.weeks);
+
+      a.weeks = weeks;
+      a.status = 'ok';
+      a.error = '';
+      a.fetchedAt =
+        new Date().toISOString();
+
+      a.totalPoints = numeric(
+        body.leaderboard?.total_points ??
+        body.leaderboard?.totalPoints
+      ) ?? a.totalPoints;
+
+      if (
+        typeof body.name === 'string' &&
+        body.name
+      ) {
+        a.name =
+          body.name.slice(0, 160);
+      }
+
+      streak = 0;
+
+    } catch (error) {
+      if (signal.aborted) {
+        throw error;
+      }
+
+      a.status = 'error';
+      a.error = error.message;
+
+      failures++;
+      streak++;
+
+      log(
+        `${a.address}：${error.message}`
+      );
+
+      if (
+        error.fatal ||
+        streak >= 3 ||
+        error.code === 429
+      ) {
+        throw new Error(
+          '已暂停批量查询：' +
+          error.message
+        );
+      }
+    }
+
+    done++;
+
+    if (
+      done === 1 ||
+      done % 10 === 0
+    ) {
+      render();
+    }
+
+    if (done % 20 === 0) {
+      await save();
+    }
+
+    if (done < list.length) {
+      await wait(
+        interval(),
+        signal
+      );
+    }
+  }
+
+  message(
+    `本轮查询结束：成功 ${done - failures} 个，` +
+    `失败 ${failures} 个。切换周无需重新查询。`
+  );
+}
+
+function download(name, content, type) {
+  const url = URL.createObjectURL(
+    new Blob(
+      [content],
+      { type }
+    )
+  );
+
+  const link =
+    document.createElement('a');
+
+  link.href = url;
+  link.download = name;
+
+  document.body.append(link);
+  link.click();
+  link.remove();
+
+  setTimeout(
+    () => URL.revokeObjectURL(url),
+    10000
+  );
+}
+
+function csvCell(value) {
+  let text =
+    String(value ?? '');
+
+  // 避免名称或其他文本被表格软件
+  // 当作公式执行。
+  if (
+    /^[\s\u0000-\u001f]*[=+\-@]/.test(text)
+  ) {
+    text = "'" + text;
+  }
+
+  return (
+    '"' +
+    text.replace(/"/g, '""') +
+    '"'
+  );
+}
+
+function exportCSV() {
+  render();
+
+  if (!activeWeek) {
+    return message(
+      '暂无可导出的周；先查询地址或选择已有周。'
+    );
+  }
+
+  const rows = [[
+    '周',
+    '样本周排名',
+    '名称',
+    '钱包地址',
+    '周积分',
+    '推荐积分',
+    '累计总积分（最近查询值）',
+    '状态',
+    '错误',
+    '采集时间UTC',
+    '周开始原值',
+    '周结束原值'
+  ]];
+
+  for (const r of lastRows) {
+    rows.push([
+      activeWeek,
+      r.rank,
+      r.a.name,
+      r.a.address,
+
+      r.a.status === 'ok'
+        ? r.w?.points
+        : '',
+
+      r.a.status === 'ok'
+        ? r.w?.referral_points
+        : '',
+
+      r.a.totalPoints,
+      r.state,
+      r.a.error,
+      r.a.fetchedAt,
+      r.w?.week_start,
+      r.w?.week_end
+    ]);
+  }
+
+  download(
+    `predict-week-${activeWeek}-sample.csv`,
+
+    '\uFEFF' +
+      rows.map(
+        r =>
+          r.map(csvCell).join(',')
+      ).join('\r\n'),
+
+    'text/csv;charset=utf-8'
+  );
+
+  message(
+    `已导出第 ${activeWeek} 周的全部 ` +
+    `${lastRows.length} 个地址，` +
+    '不受页面筛选和分页影响。'
+  );
+}
+
+function addAddresses(text) {
+  const found = text.match(
+    /\b0x[0-9a-fA-F]{40}\b/g
+  ) || [];
+
+  if (!found.length) {
+    throw new Error(
+      '未找到有效的 0x 钱包地址。'
+    );
+  }
+
+  const before =
+    accounts.size;
+
+  found.forEach(address => {
+    merge(
+      accountOf(address)
+    );
+  });
+
+  message(
+    `新增 ${accounts.size - before} 个地址，` +
+    `当前共 ${accounts.size} 个。`
+  );
+}
+
+$('collect').onclick = () =>
+  run(collect, true);
+
+$('query').onclick = () =>
+  run(
+    signal => query(false, signal),
+    true
+  );
+
+$('refresh').onclick = () =>
+  run(
+    signal => query(true, signal),
+    true
+  );
+
+$('stop').onclick = () =>
+  task?.abort();
+
+$('add').onclick = () =>
+  run(async () => {
+    addAddresses(
+      $('addresses').value
+    );
+
+    $('addresses').value = '';
+  });
+
+$('resetCursor').onclick = () =>
+  run(async () => {
+    if (
+      !confirm(
+        '重置总榜采集进度？已查询的地址和积分会保留。'
+      )
+    ) {
+      return;
+    }
+
+    discovery = {
+      cursor: '',
+      pages: 0,
+      finished: false,
+      seen: []
+    };
+
+    message('总榜游标已重置。');
+  });
+
+$('clear').onclick = () =>
+  run(async () => {
+    if (
+      !confirm(
+        '清空当前浏览器缓存的所有地址、积分和游标？请先导出备份。'
+      )
+    ) {
+      return;
+    }
+
+    accounts.clear();
+
+    discovery = {
+      cursor: '',
+      pages: 0,
+      finished: false,
+      seen: []
+    };
+
+    message('已清空。');
+  });
+
+$('backup').onclick = () =>
+  download(
+    'predict-weekly-backup.json',
+
+    JSON.stringify(
+      snapshot(),
+      null,
+      2
+    ),
+
+    'application/json'
+  );
+
+$('csv').onclick =
+  exportCSV;
+
+$('import').onclick = () => {
+  $('file').value = '';
+  $('file').click();
+};
+
+$('file').onchange = () =>
+  run(async () => {
+    const file =
+      $('file').files[0];
+
+    if (!file) return;
+
+    if (
+      file.size > 100 * 1024 * 1024
+    ) {
+      throw new Error(
+        '文件超过 100 MB，已停止导入。'
+      );
+    }
+
+    const text =
+      await file.text();
+
+    if (
+      file.name
+        .toLowerCase()
+        .endsWith('.json')
+    ) {
+      const data =
+        parseJSON(text);
+
+      if (
+        data?.app ===
+        'predict-weekly-vercel'
+      ) {
+        if (
+          accounts.size &&
+          !confirm(
+            '恢复断点将替换当前数据，是否继续？'
+          )
+        ) {
+          return;
+        }
+
+        restore(data);
+
+        message(
+          `已恢复 ${accounts.size} 个地址及采集进度。`
+        );
+
+        return;
+      }
+    }
+
+    // 普通 TXT、CSV、JSON
+    // 仅提取钱包地址。
+    addAddresses(text);
+  });
+
+$('week').onchange =
+$('settled').onchange =
+$('search').oninput = () => {
+  page = 1;
+  render();
+};
+
+$('prev').onclick = () => {
+  page--;
+  render();
+};
+
+$('next').onclick = () => {
+  page++;
+  render();
+};
+
+window.addEventListener(
+  'beforeunload',
+  event => {
+    if (task) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  }
+);
+
+(async function init() {
+  document
+    .querySelectorAll('[data-lock]')
+    .forEach(el => {
+      el.disabled = true;
+    });
+
+  try {
+    db = await new Promise(
+      (resolve, reject) => {
+        const open = indexedDB.open(
+          'predict-weekly-vercel-v2',
+          1
+        );
+
+        open.onupgradeneeded = () => {
+          open.result.createObjectStore(
+            'cache'
+          );
+        };
+
+        open.onsuccess = () => {
+          resolve(open.result);
+        };
+
+        open.onerror = () => {
+          reject(open.error);
+        };
+
+        open.onblocked = () => {
+          reject(
+            new Error(
+              '缓存被其他窗口占用'
+            )
+          );
+        };
+      }
+    );
+
+    const saved = await new Promise(
+      (resolve, reject) => {
+        const r = db
+          .transaction('cache')
+          .objectStore('cache')
+          .get('snapshot');
+
+        r.onsuccess = () =>
+          resolve(r.result);
+
+        r.onerror = () =>
+          reject(r.error);
+      }
+    );
+
+    if (saved) {
+      restore(saved);
+    }
+
+    message(
+      accounts.size
+        ? `已恢复本机缓存：${accounts.size} 个地址。`
+        : '先添加地址或采集总榜，再查询历史积分。'
+    );
+
+  } catch {
+    message(
+      '未恢复缓存，可以重新导入地址或断点 JSON。'
+    );
+
+    $('storage').textContent =
+      '浏览器缓存不可用时，请手动导出断点保存。';
+  }
+
+  document
+    .querySelectorAll('[data-lock]')
+    .forEach(el => {
+      el.disabled = false;
+    });
+
+  render();
+})();
+</script>
+</body>
+</html>
