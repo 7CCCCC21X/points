@@ -15,8 +15,8 @@ const BODY_MAX = 2 * 1024 * 1024;
 const UPSTREAM_TIMEOUT = 18000;
 
 // 实例级保护，不是跨实例的全局限流。公开使用还应配置 Vercel WAF。
-const RATE_PER_SECOND = 3;
-const MAX_CONCURRENT = 3;
+const RATE_PER_SECOND = 8;
+const MAX_CONCURRENT = 8;
 const hits = [];
 let active = 0;
 

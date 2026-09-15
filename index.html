@@ -117,8 +117,8 @@ tbody tr.active td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 tbody tr:last-child td{border-bottom:0}
 td.num,th.num{text-align:right}
 td.addr,.addr{font-family:var(--mono);font-size:12px;color:var(--muted)}
-td.addr{cursor:pointer}
-td.addr:hover{color:var(--accent)}
+td.addr-link{cursor:pointer}
+td.addr-link:hover{color:var(--accent);text-decoration:underline}
 td.rank{font-weight:600}
 td.rank.top{color:var(--accent)}
 td.empty{text-align:center;color:var(--muted);padding:32px;white-space:normal}
@@ -226,13 +226,19 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   <div class="toolbar">
     <div class="actions">
       <button id="query" class="primary" data-lock>查询 / 继续未完成地址</button>
+      <button id="update" data-lock>更新到最新周（只查过期地址）</button>
       <button id="refresh" data-lock>重新查询全部地址</button>
       <button id="stop" disabled>停止</button>
     </div>
 
     <label class="field">
+      <span>并发数</span>
+      <input id="concurrency" type="number" min="1" max="6" value="3" data-lock>
+    </label>
+
+    <label class="field">
       <span>请求间隔（毫秒）</span>
-      <input id="interval" type="number" min="350" max="10000" value="700" data-lock>
+      <input id="interval" type="number" min="150" max="10000" value="350" data-lock>
     </label>
 
     <div class="actions">
@@ -248,7 +254,9 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   </div>
 
   <p class="muted hint">
-    每次查询都会按周合并保存：已有的周用新数据更新，接口不再返回的历史周仍保留在本机缓存里，随时可以回看。
+    接口一次返回地址的全部周，每次查询都按周合并保存：已结算的历史周永久留在本机缓存，随时可看。
+    “更新到最新周”只查未成功的地址和本周开始前查过的地址（它们可能多出一个新结算周），其余地址跳过。
+    整体速率 = 1 / 请求间隔，并发只影响同时在途的请求数；上游限流时会自动退避。
   </p>
 </section>
 
@@ -800,8 +808,12 @@ function openDB() {
   });
 }
 
+let saving = false;
+
 async function save() {
-  if (!db) return;
+  if (!db || saving) return;
+
+  saving = true;
 
   try {
     await new Promise((resolve, reject) => {
@@ -815,6 +827,8 @@ async function save() {
     $('storage').textContent = '';
   } catch {
     $('storage').textContent = '本机缓存写入失败，请使用“导出断点 JSON”保存进度。';
+  } finally {
+    saving = false;
   }
 }
 
@@ -1024,8 +1038,8 @@ function rowHTML(r, mode) {
   return `
     <tr>
       <td class="rank${r.rank && r.rank <= 3 ? ' top' : ''}">${r.rank || '—'}</td>
-      <td>${escapeHTML(a.name || '—')}</td>
-      <td class="addr" title="点击查看该地址各周排名">${escapeHTML(a.address)}</td>
+      <td class="addr-link" title="点击查看该地址各周积分与排名">${escapeHTML(a.name || '—')}</td>
+      <td class="addr addr-link" title="点击查看该地址各周积分与排名">${escapeHTML(a.address)}</td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
       ${num('', ok ? format(r.w?.referral_points) : '—')}
       ${num('sum', format(r.sum), r.sum ? `${decimalString(r.sum)}（已结算 ${r.count} 周）` : '')}
@@ -1297,8 +1311,9 @@ async function run(work, needsPassword = false) {
   }
 }
 
-const interval = () => clamp($('interval').value, 350, 10000, 700);
+const interval = () => clamp($('interval').value, 150, 10000, 350);
 const targetCount = () => clamp($('targetCount').value, 100, 200000, 10000);
+const concurrency = () => clamp($('concurrency').value, 1, 6, 3);
 
 // 总榜接口尚未实测，这里兼容几种常见的列表 / 游标字段名。
 function leaderboardPage(data) {
@@ -1393,7 +1408,7 @@ async function pipeline(signal) {
   }
 
   await wait(interval(), signal);
-  await query(false, signal);
+  await query('stale', signal);
 }
 
 function applyPoints(a, json) {
@@ -1425,60 +1440,100 @@ function applyPoints(a, json) {
   touch();
 }
 
-async function query(all, signal) {
-  const list = [...accounts.values()].filter(a => all || a.status !== 'ok');
+// 查询范围：pending = 未成功的地址；stale = 未成功 + 本周开始前查过的地址（可能有新结算周）；all = 全部。
+function needsQuery(a, scope) {
+  if (scope === 'all' || a.status !== 'ok') return true;
+  if (scope !== 'stale') return false;
+
+  const weekStart = weekBounds(currentWeekNumber()).start * 1000;
+  const fetched = Date.parse(a.fetchedAt);
+  return !Number.isFinite(fetched) || fetched < weekStart;
+}
+
+// 并发查询：多个 worker 共用一个发车时刻表，整体速率 = 1 / 请求间隔，
+// 同时在途的请求数 = 并发数。已结算周的数据合并保存，不会重复请求。
+async function query(scope, signal) {
+  const list = [...accounts.values()].filter(a => needsQuery(a, scope));
 
   if (!list.length) {
-    return message('没有需要查询的地址。请先添加地址，或使用“重新查询全部地址”。');
+    return message(
+      scope === 'stale'
+        ? '所有地址都已在本周内查询过，没有需要更新的地址。'
+        : '没有需要查询的地址。请先添加地址，或使用“重新查询全部地址”。'
+    );
   }
 
+  const workers = Math.min(concurrency(), list.length);
+  const gap = interval();
+  const startedAt = Date.now();
+
+  let index = 0;
   let done = 0;
   let failures = 0;
   let streak = 0;
+  let nextSlot = 0;
   let lastRender = 0;
   let lastSave = Date.now();
+  let stopError = null;
 
-  for (const a of list) {
-    if (signal.aborted) throw abortError();
+  const worker = async () => {
+    while (!stopError) {
+      if (signal.aborted) throw abortError();
 
-    message(`查询 ${done + 1}/${list.length}：${a.address}`);
-    progress(done, list.length);
+      const i = index++;
+      if (i >= list.length) return;
 
-    try {
-      applyPoints(a, await request('points', { address: a.address }, signal));
-      streak = 0;
-    } catch (error) {
-      if (signal.aborted) throw error;
+      const a = list[i];
+      const now = Date.now();
+      const slot = Math.max(now, nextSlot);
+      nextSlot = slot + gap;
+      if (slot > now) await wait(slot - now, signal);
 
-      a.status = 'error';
-      a.error = error.message;
-      touch();
+      try {
+        applyPoints(a, await request('points', { address: a.address }, signal));
+        streak = 0;
+      } catch (error) {
+        if (signal.aborted) throw error;
 
-      failures++;
-      streak++;
+        a.status = 'error';
+        a.error = error.message;
+        touch();
 
-      log(`${a.address}：${error.message}`);
+        failures++;
+        streak++;
 
-      if (error.fatal || streak >= 3 || error.code === 429) {
-        throw new Error('已暂停批量查询：' + error.message);
+        log(`${a.address}：${error.message}`);
+
+        if (error.fatal || streak >= 3 || error.code === 429) {
+          stopError = new Error('已暂停批量查询：' + error.message);
+          return;
+        }
+      }
+
+      done++;
+
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const rate = done / Math.max(elapsed, 1);
+      const eta = Math.round((list.length - done) / Math.max(rate, 0.01));
+      message(`查询 ${done}/${list.length}（${workers} 并发，约 ${rate.toFixed(1)} 个/秒，剩余约 ${eta} 秒）`);
+      progress(done, list.length);
+
+      // 地址很多时，渲染和落盘按时间节流，避免每次都重算整表、重写整个快照。
+      if (done === 1 || Date.now() - lastRender > 3000) {
+        render();
+        lastRender = Date.now();
+      }
+
+      if (Date.now() - lastSave > 20000) {
+        lastSave = Date.now();
+        await save();
       }
     }
+  };
 
-    done++;
+  await Promise.all(Array.from({ length: workers }, worker));
 
-    // 地址很多时，渲染和落盘按时间节流，避免每次都重算整表、重写整个快照。
-    if (done === 1 || Date.now() - lastRender > 3000) {
-      render();
-      lastRender = Date.now();
-    }
-
-    if (Date.now() - lastSave > 20000) {
-      await save();
-      lastSave = Date.now();
-    }
-
-    if (done < list.length) await wait(interval(), signal);
-  }
+  if (stopError) throw stopError;
 
   message(`本轮查询结束：成功 ${done - failures} 个，失败 ${failures} 个。切换周或榜单无需重新查询。`);
 }
@@ -1623,8 +1678,9 @@ async function importFile(file) {
 
 $('collect').onclick = () => run(collect, true);
 $('pipeline').onclick = () => run(pipeline, true);
-$('query').onclick = () => run(signal => query(false, signal), true);
-$('refresh').onclick = () => run(signal => query(true, signal), true);
+$('query').onclick = () => run(signal => query('pending', signal), true);
+$('update').onclick = () => run(signal => query('stale', signal), true);
+$('refresh').onclick = () => run(signal => query('all', signal), true);
 $('stop').onclick = () => task?.abort();
 $('csv').onclick = exportCSV;
 $('csvAll').onclick = exportAllCSV;
@@ -1685,8 +1741,8 @@ $('next').onclick = () => { page++; render(); };
 
 // 点击主表中的地址 → 查看该地址各周排名。
 $('tbody').onclick = event => {
-  const cell = event.target.closest('td.addr');
-  if (cell) showLookup(cell.textContent.trim());
+  const cell = event.target.closest('td.addr-link');
+  if (cell) showLookup(cell.parentElement.querySelector('td.addr').textContent.trim());
 };
 
 // 历史周概览中的“查看周排名”。
