@@ -318,7 +318,8 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   <h2><span class="step">4</span>历史周概览</h2>
 
   <p class="muted hint">
-    本机已保存的每一周的样本统计。点击“查看周排名”切换到该周的周排名。
+    本机已保存的每一周的样本统计。周期按第 1 周 = 2025-12-16 22:00（北京时间）、每周 7 天推算，
+    接口返回了起止时间时以接口为准。点击“查看周排名”切换到该周的周排名。
   </p>
 
   <div class="tablebox compact">
@@ -377,6 +378,11 @@ const PAGE_SIZE = 100;
 const NAME_MAX = 160;
 const CURSOR_MAX = 4096;
 const LOG_MAX = 120;
+
+// 周号规则与 yuce 项目一致：W1 从 2025-12-16 14:00 UTC（北京时间 22:00）开始，
+// 每周 7 天；「本周」按当前时间推算，并与数据里见过的最大周号取大。
+const WEEK_ANCHOR_START_TS = 1765893600;
+const WEEK_SECONDS = 604800;
 
 const STATES = {
   ok:        ['已结算',     'ok'],
@@ -445,8 +451,9 @@ const beijingTime = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit', minute: '2-digit', second: '2-digit'
 });
 
-const beijingDate = new Intl.DateTimeFormat('zh-CN', {
-  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+const beijingMinute = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', hour12: false,
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
 });
 
 function timeText(iso) {
@@ -455,22 +462,37 @@ function timeText(iso) {
   return Number.isNaN(+date) ? '—' : beijingTime.format(date);
 }
 
-// 周起止原值可能是秒、毫秒或日期字符串；解析不了就原样显示。
-function dateText(value) {
-  if (value == null || value === '') return '';
+// 按当前时间推算的周号（至少为 1）。
+function currentWeekNumber() {
+  const now = Math.floor(Date.now() / 1000);
+  return Math.max(1, Math.floor((now - WEEK_ANCHOR_START_TS) / WEEK_SECONDS) + 1);
+}
+
+// 某周按锚点推算的起止时间（UTC 秒）。
+function weekBounds(week) {
+  const start = WEEK_ANCHOR_START_TS + (week - 1) * WEEK_SECONDS;
+  return { start, end: start + WEEK_SECONDS };
+}
+
+// 接口给的周起止原值可能是秒、毫秒或日期字符串；解析为毫秒，解析不了返回 null。
+function toMillis(value) {
+  if (value == null || value === '') return null;
 
   const raw = String(value).trim();
   const ms = /^\d{9,10}$/.test(raw) ? Number(raw) * 1000
     : /^\d{12,13}$/.test(raw) ? Number(raw)
     : Date.parse(raw);
 
-  return Number.isFinite(ms) ? beijingDate.format(new Date(ms)) : raw;
+  return Number.isFinite(ms) ? ms : null;
 }
 
-function periodText(w) {
-  const start = dateText(w.week_start);
-  const end = dateText(w.week_end);
-  return start || end ? `${start || '?'} ~ ${end || '?'}` : '—';
+// 周期（北京时间）：优先用接口返回的起止时间，缺失时按锚点推算。
+function periodText(week, w) {
+  const bounds = weekBounds(week);
+  const start = toMillis(w?.week_start) ?? bounds.start * 1000;
+  const end = toMillis(w?.week_end) ?? bounds.end * 1000;
+
+  return `${beijingMinute.format(new Date(start))} ~ ${beijingMinute.format(new Date(end))}`;
 }
 
 function message(text) {
@@ -920,6 +942,16 @@ function weekSummaries() {
     }
   }
 
+  // 本周即使还没有数据也列出来，便于对照周期。
+  const current = currentWeekNumber();
+
+  if (!byWeek.has(current)) {
+    byWeek.set(current, {
+      week: current, week_start: null, week_end: null,
+      records: 0, ranked: 0, top: null, topScore: null, sum: null, updatedAt: ''
+    });
+  }
+
   summaryCache = [...byWeek.values()].sort((x, y) => y.week - x.week);
   return summaryCache;
 }
@@ -938,19 +970,27 @@ function syncWeekSelect(all) {
     }
   }
 
+  // 下拉框列出第 1 周到本周（或数据里更大的周号）的全部周，标出本周和没有记录的周。
+  const current = currentWeekNumber();
+  const maxWeek = Math.max(current, ...weeks);
   const select = $('week');
   const selected = select.value;
-  const sorted = [...weeks].sort((a, b) => b - a);
-  const key = sorted.join(',');
+  const key = `${maxWeek}|${current}|${[...weeks].sort((a, b) => a - b).join(',')}`;
 
   if (key !== weekOptionsKey) {
     weekOptionsKey = key;
-    select.innerHTML =
-      '<option value="latest">最新已结算周</option>' +
-      sorted.map(w => `<option value="${w}">第 ${w} 周</option>`).join('');
+
+    const options = [];
+    for (let w = maxWeek; w >= 1; w--) {
+      const tag = w === current ? '（本周）' : weeks.has(w) ? '' : '（无记录）';
+      options.push(`<option value="${w}">第 ${w} 周${tag}</option>`);
+    }
+
+    select.innerHTML = '<option value="latest">最新已结算周</option>' + options.join('');
   }
 
-  select.value = selected === 'latest' || weeks.has(Number(selected)) ? selected : 'latest';
+  const chosen = Number(selected);
+  select.value = selected === 'latest' || (chosen >= 1 && chosen <= maxWeek) ? selected : 'latest';
 
   return select.value === 'latest' ? latest : Number(select.value);
 }
@@ -985,10 +1025,12 @@ function weekRowHTML(s) {
     ? `${escapeHTML(s.top.name || '')} <span class="addr" title="${escapeHTML(s.top.address)}">${shortAddress(s.top.address)}</span>`
     : '—';
 
+  const tag = s.week === currentWeekNumber() ? ' <span class="badge badge-ok">本周</span>' : '';
+
   return `
     <tr${s.week === activeWeek ? ' class="active"' : ''}>
-      <td>第 ${s.week} 周</td>
-      <td>${escapeHTML(periodText(s))}</td>
+      <td>第 ${s.week} 周${tag}</td>
+      <td>${escapeHTML(periodText(s.week, s))}</td>
       <td class="num">${s.records.toLocaleString()} / ${s.ranked.toLocaleString()}</td>
       <td>${top}</td>
       <td class="num" title="${s.topScore ? escapeHTML(decimalString(s.topScore)) : ''}">${format(s.topScore)}</td>
@@ -1021,7 +1063,8 @@ function render() {
   $('coverage').textContent =
     `总榜已接收 ${discovery.pages} 页；` +
     (discovery.finished ? '已到接口游标末尾，仍不代表全网历史完整覆盖' : '尚未确认采集完成') +
-    `。当前榜单：${MODES[mode].label}；所选周：${activeWeek ? `第 ${activeWeek} 周` : '暂无已结算周'}。`;
+    `。当前榜单：${MODES[mode].label}；所选周：${activeWeek ? `第 ${activeWeek} 周` : '暂无已结算周'}；` +
+    `按周期推算现在是第 ${currentWeekNumber()} 周。`;
 
   $('rankHead').textContent = MODES[mode].head;
   document.querySelectorAll('th[data-basis]').forEach(th => {
@@ -1089,8 +1132,8 @@ function lookup(address = $('lookup').value.trim()) {
 
     return `
       <tr>
-        <td>第 ${w.week} 周</td>
-        <td>${escapeHTML(periodText(w))}</td>
+        <td>第 ${w.week} 周${w.week === currentWeekNumber() ? '（本周）' : ''}</td>
+        <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
         <td class="num">${format(w.referral_points)}</td>
         <td>${badge(key)}</td>
@@ -1445,7 +1488,7 @@ function exportAllCSV() {
       items.push({
         week: w.week, rank, address: a.address,
         cells: [
-          w.week, rank, ranked, a.name, a.address, w.points, w.referral_points,
+          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points,
           STATES[key][0], w.week_start, w.week_end, w.updatedAt
         ]
       });
@@ -1463,7 +1506,7 @@ function exportAllCSV() {
   );
 
   downloadCSV('predict-all-weeks-sample.csv', [
-    ['周', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
+    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
     ...items.map(item => item.cells)
   ]);
 
