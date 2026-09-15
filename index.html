@@ -117,8 +117,10 @@ tbody tr.active td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 tbody tr:last-child td{border-bottom:0}
 td.num,th.num{text-align:right}
 td.addr,.addr{font-family:var(--mono);font-size:12px;color:var(--muted)}
-td.addr-link{cursor:pointer}
-td.addr-link:hover{color:var(--accent);text-decoration:underline}
+td.name-link{cursor:pointer}
+td.name-link:hover{color:var(--accent);text-decoration:underline}
+a.addr{color:inherit;text-decoration:none}
+a.addr:hover{color:var(--accent);text-decoration:underline}
 td.rank{font-weight:600}
 td.rank.top{color:var(--accent)}
 td.empty{text-align:center;color:var(--muted);padding:32px;white-space:normal}
@@ -299,7 +301,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 
   <p class="muted hint">
     名次是当前样本内的排名，不是官方全网榜；同分并列。周排名只给查询成功、明确已结算且积分有效的记录；
-    合计榜按每个地址所有已结算周的周积分相加。点击表格中的地址可查看该地址各周排名。
+    合计榜按每个地址所有已结算周的周积分相加。点击名称可查看该地址各周积分与排名，点击钱包地址跳转到 predict.fun 的 portfolio 页面。
   </p>
 
   <div class="tablebox">
@@ -364,7 +366,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   <h2><span class="step">5</span>查询地址的各周排名</h2>
 
   <div class="toolbar">
-    <input id="lookup" placeholder="粘贴钱包地址，或点击上方表格中的地址" aria-label="钱包地址"
+    <input id="lookup" placeholder="粘贴钱包地址，或点击上方表格中的名称" aria-label="钱包地址"
       spellcheck="false" autocomplete="off">
     <button id="lookupBtn" class="primary">查询周排名</button>
   </div>
@@ -397,6 +399,7 @@ const PAGE_SIZE = 100;
 const NAME_MAX = 160;
 const CURSOR_MAX = 4096;
 const LOG_MAX = 120;
+const PORTFOLIO_URL = 'https://predict.fun/zh-cn/portfolio/';
 
 // 周号规则与 yuce 项目一致：W1 从 2025-12-16 14:00 UTC（北京时间 22:00）开始，
 // 每周 7 天；「本周」按当前时间推算，并与数据里见过的最大周号取大。
@@ -1038,8 +1041,9 @@ function rowHTML(r, mode) {
   return `
     <tr>
       <td class="rank${r.rank && r.rank <= 3 ? ' top' : ''}">${r.rank || '—'}</td>
-      <td class="addr-link" title="点击查看该地址各周积分与排名">${escapeHTML(a.name || '—')}</td>
-      <td class="addr addr-link" title="点击查看该地址各周积分与排名">${escapeHTML(a.address)}</td>
+      <td class="name-link" title="点击查看该地址各周积分与排名">${escapeHTML(a.name || '—')}</td>
+      <td class="addr"><a class="addr" href="${PORTFOLIO_URL}${escapeHTML(a.address)}" target="_blank" rel="noopener noreferrer"
+        title="在 predict.fun 打开该地址的 portfolio">${escapeHTML(a.address)}</a></td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
       ${num('', ok ? format(r.w?.referral_points) : '—')}
       ${num('sum', format(r.sum), r.sum ? `${decimalString(r.sum)}（已结算 ${r.count} 周）` : '')}
@@ -1051,7 +1055,7 @@ function rowHTML(r, mode) {
 
 function weekRowHTML(s) {
   const top = s.top
-    ? `${escapeHTML(s.top.name || '')} <span class="addr" title="${escapeHTML(s.top.address)}">${shortAddress(s.top.address)}</span>`
+    ? `${escapeHTML(s.top.name || '')} <a class="addr" href="${PORTFOLIO_URL}${escapeHTML(s.top.address)}" target="_blank" rel="noopener noreferrer" title="${escapeHTML(s.top.address)}">${shortAddress(s.top.address)}</a>`
     : '—';
 
   const tag = s.week === currentWeekNumber() ? ' <span class="badge badge-ok">本周</span>' : '';
@@ -1138,7 +1142,7 @@ function lookup(address = $('lookup').value.trim()) {
 
   const meta = `
     <div class="meta">
-      <div><b>${escapeHTML(a.name || '未命名')}</b> <span class="addr">${escapeHTML(a.address)}</span></div>
+      <div><b>${escapeHTML(a.name || '未命名')}</b> <a class="addr" href="${PORTFOLIO_URL}${escapeHTML(a.address)}" target="_blank" rel="noopener noreferrer">${escapeHTML(a.address)}</a></div>
       <div><span>查询状态</span> ${escapeHTML(accountState)}</div>
       <div><span>总榜名次</span> ${a.rank ?? '—'}</div>
       <div><span>累计总积分</span> ${format(a.totalPoints)}</div>
@@ -1739,9 +1743,9 @@ $('search').oninput = () => {
 $('prev').onclick = () => { page--; render(); };
 $('next').onclick = () => { page++; render(); };
 
-// 点击主表中的地址 → 查看该地址各周排名。
+// 点击主表中的名称 → 查看该地址各周积分与排名；地址本身是跳转 predict.fun 的链接。
 $('tbody').onclick = event => {
-  const cell = event.target.closest('td.addr-link');
+  const cell = event.target.closest('td.name-link');
   if (cell) showLookup(cell.parentElement.querySelector('td.addr').textContent.trim());
 };
 
