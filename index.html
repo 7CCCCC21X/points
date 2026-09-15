@@ -30,7 +30,7 @@
 }
 
 *,*::before,*::after{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
 body{
   margin:0;min-height:100vh;color:var(--text);background:var(--bg);
   background-image:
@@ -53,7 +53,7 @@ h2{display:flex;align-items:center;gap:10px;font-size:16px;margin:0 0 14px}
 
 .card{
   background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
-  padding:20px;margin:16px 0;box-shadow:var(--shadow);
+  padding:20px;margin:16px 0;box-shadow:var(--shadow);scroll-margin-top:12px;
 }
 .toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
 .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
@@ -74,7 +74,8 @@ input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-vis
 input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px;padding:0;margin:0}
 input[type=number]{width:120px}
 input[type=password]{width:280px;max-width:100%}
-#search{min-width:220px;flex:1}
+#search{min-width:200px;flex:1}
+#lookup{flex:1;min-width:260px;font-family:var(--mono);font-size:13px}
 textarea{
   width:100%;min-height:110px;resize:vertical;margin:14px 0 12px;
   font-family:var(--mono);font-size:13px;
@@ -85,6 +86,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:var(--a
 button.primary:hover:not(:disabled){background:var(--accent-2);border-color:var(--accent-2)}
 button.danger{color:var(--err)}
 button.danger:hover:not(:disabled){border-color:var(--err)}
+button.small{padding:4px 10px;font-size:12px;border-radius:8px}
 button:disabled{opacity:.45;cursor:not-allowed}
 
 .status-box{margin-top:16px;padding:12px 14px;border-radius:10px;background:var(--bg-2);border:1px solid var(--line)}
@@ -103,13 +105,20 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .stat.highlight strong{color:var(--accent)}
 
 .tablebox{max-height:600px;overflow:auto;margin-top:14px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
-table{border-collapse:separate;border-spacing:0;min-width:1050px;width:100%;font-variant-numeric:tabular-nums}
+.tablebox.compact{max-height:380px}
+table{border-collapse:separate;border-spacing:0;min-width:1180px;width:100%;font-variant-numeric:tabular-nums}
+table.auto{min-width:860px}
 th,td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;vertical-align:middle}
 th{position:sticky;top:0;z-index:1;background:var(--card-2);font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+th.basis{color:var(--accent)}
+td.basis{background:color-mix(in srgb,var(--accent) 7%,transparent);font-weight:600}
 tbody tr:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+tbody tr.active td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 tbody tr:last-child td{border-bottom:0}
 td.num,th.num{text-align:right}
-td.addr{font-family:var(--mono);font-size:12px;color:var(--muted)}
+td.addr,.addr{font-family:var(--mono);font-size:12px;color:var(--muted)}
+td.addr{cursor:pointer}
+td.addr:hover{color:var(--accent)}
 td.rank{font-weight:600}
 td.rank.top{color:var(--accent)}
 td.empty{text-align:center;color:var(--muted);padding:32px;white-space:normal}
@@ -119,6 +128,17 @@ td.empty{text-align:center;color:var(--muted);padding:32px;white-space:normal}
 .badge-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
 .badge-err{color:var(--err);background:color-mix(in srgb,var(--err) 14%,transparent)}
 .badge-muted{color:var(--muted);background:color-mix(in srgb,var(--muted) 14%,transparent)}
+
+.meta{
+  display:flex;flex-wrap:wrap;gap:6px 20px;margin:14px 0 0;padding:12px 14px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:10px;font-size:13px;
+}
+.meta span{color:var(--muted)}
+.meta b{font-weight:600}
+.meta .addr{font-size:12px}
+#lookupResult .tablebox{margin-top:12px}
+#lookupResult p{margin:12px 0 0}
+#lookupResult p:empty{display:none}
 
 #pager{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
 #pageInfo{flex:1;text-align:center;color:var(--muted);font-size:13px}
@@ -138,7 +158,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   .stats{gap:8px}
   .stat{padding:12px}
   .stat strong{font-size:22px}
-  .field,.field input,input[type=number],input[type=password]{width:100%}
+  .field,.field input,.field select,input[type=number],input[type=password]{width:100%}
   .actions{width:100%}
   .actions button{flex:1}
   #pageInfo{font-size:12px}
@@ -215,18 +235,31 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
     <p id="coverage" class="muted"></p>
     <p id="storage"></p>
   </div>
+
+  <p class="muted hint">
+    每次查询都会按周合并保存：已有的周用新数据更新，接口不再返回的历史周仍保留在本机缓存里，随时可以回看。
+  </p>
 </section>
 
 <div class="stats">
   <div class="stat"><small>已载入地址</small><strong id="s1">0</strong></div>
   <div class="stat"><small>查询成功 / 失败</small><strong id="s2">0 / 0</strong></div>
-  <div class="stat highlight"><small>所选周可排名地址</small><strong id="s3">0</strong></div>
+  <div class="stat highlight"><small>当前榜单可排名地址</small><strong id="s3">0</strong></div>
 </div>
 
-<section class="card">
-  <h2><span class="step">3</span>选择周、查看排名、下载 CSV</h2>
+<section class="card" id="ranking">
+  <h2><span class="step">3</span>排行榜：选择榜单与周、查看排名、下载 CSV</h2>
 
   <div class="toolbar">
+    <label class="field">
+      <span>榜单</span>
+      <select id="mode">
+        <option value="week">所选周积分（周排名）</option>
+        <option value="sum">已结算周积分合计</option>
+        <option value="total">累计总积分</option>
+      </select>
+    </label>
+
     <label class="field">
       <span>周</span>
       <select id="week"><option value="latest">最新已结算周</option></select>
@@ -239,24 +272,29 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
       仅显示可排名记录
     </label>
 
-    <button id="csv" data-lock>导出本周 CSV（全部地址）</button>
+    <div class="actions">
+      <button id="csv" data-lock>导出当前榜单 CSV</button>
+      <button id="csvAll" data-lock>导出全部周 CSV</button>
+    </div>
   </div>
 
   <p class="muted hint">
-    名次是当前样本内的周排名，不是官方全网周榜；只给查询成功、明确已结算且积分有效的记录排名。同分并列。
+    名次是当前样本内的排名，不是官方全网榜；同分并列。周排名只给查询成功、明确已结算且积分有效的记录；
+    合计榜按每个地址所有已结算周的周积分相加。点击表格中的地址可查看该地址各周排名。
   </p>
 
   <div class="tablebox">
     <table>
       <thead>
         <tr>
-          <th>样本周排名</th>
+          <th id="rankHead">周排名</th>
           <th>名称</th>
           <th>钱包地址</th>
-          <th class="num">周积分</th>
+          <th class="num" data-basis="week">周积分</th>
           <th class="num">推荐积分</th>
-          <th class="num">累计总积分*</th>
-          <th>状态</th>
+          <th class="num" data-basis="sum">已结算周合计</th>
+          <th class="num" data-basis="total">累计总积分*</th>
+          <th>所选周状态</th>
           <th>采集时间（北京时间）</th>
         </tr>
       </thead>
@@ -272,8 +310,48 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 
   <p class="muted hint">
     *累计积分取最近一次地址查询的 leaderboard 字段，没有则使用采集总榜的值；不是该历史周末的累计值。
-    推荐积分单列，不再次加进周积分，也不乘 1.1。
+    推荐积分单列，不加进周积分和合计，也不乘 1.1。
   </p>
+</section>
+
+<section class="card">
+  <h2><span class="step">4</span>历史周概览</h2>
+
+  <p class="muted hint">
+    本机已保存的每一周的样本统计。点击“查看周排名”切换到该周的周排名。
+  </p>
+
+  <div class="tablebox compact">
+    <table class="auto">
+      <thead>
+        <tr>
+          <th>周</th>
+          <th>周期（北京时间）</th>
+          <th class="num">记录 / 可排名</th>
+          <th>样本第一名</th>
+          <th class="num">最高周积分</th>
+          <th class="num">周积分合计</th>
+          <th>最近更新（北京时间）</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="weeksBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card" id="lookupCard">
+  <h2><span class="step">5</span>查询地址的各周排名</h2>
+
+  <div class="toolbar">
+    <input id="lookup" placeholder="粘贴钱包地址，或点击上方表格中的地址" aria-label="钱包地址"
+      spellcheck="false" autocomplete="off">
+    <button id="lookupBtn" class="primary">查询周排名</button>
+  </div>
+
+  <div id="lookupResult">
+    <p class="muted">输入地址后，这里会列出该地址在样本中每一周的积分、结算状态和名次。</p>
+  </div>
 </section>
 
 <details class="card">
@@ -294,6 +372,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 const APP = 'predict-weekly-vercel';
 const DB_NAME = 'predict-weekly-vercel-v2';
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const BOM = String.fromCharCode(0xfeff);
 const PAGE_SIZE = 100;
 const NAME_MAX = 160;
 const CURSOR_MAX = 4096;
@@ -309,6 +388,12 @@ const STATES = {
   missing:   ['该周无记录', 'muted']
 };
 
+const MODES = {
+  week:  { label: '所选周积分', head: '周排名',   file: 'week' },
+  sum:   { label: '已结算周积分合计', head: '合计排名', file: 'settled-sum' },
+  total: { label: '累计总积分', head: '总积分排名', file: 'total-points' }
+};
+
 const $ = id => document.getElementById(id);
 const accounts = new Map();
 const logs = [];
@@ -319,6 +404,21 @@ let task = null;
 let page = 1;
 let lastRows = [];
 let activeWeek = 0;
+let weekOptionsKey = '';
+
+// 数据版本：每次改动积分数据后 +1，派生缓存据此失效。
+let dataVersion = 0;
+const rankCache = new Map();        // 周号 → 该周样本排名
+const sumCache = new WeakMap();     // 地址记录 → 已结算周合计
+const totalCache = new WeakMap();   // 地址记录 → 解析后的累计总积分
+const weekDecimals = new WeakMap(); // 周记录 → 解析后的周积分
+let summaryCache = null;
+
+function touch() {
+  dataVersion++;
+  rankCache.clear();
+  summaryCache = null;
+}
 
 function emptyDiscovery() {
   return { cursor: '', pages: 0, finished: false, seen: [] };
@@ -329,6 +429,7 @@ function emptyDiscovery() {
 const validAddress = x => typeof x === 'string' && ADDRESS_RE.test(x);
 const abortError = () => new DOMException('已停止', 'AbortError');
 const clamp = (value, min, max, fallback) => Math.max(min, Math.min(max, Number(value) || fallback));
+const shortAddress = address => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
 const escapeHTML = x => String(x ?? '').replace(/[&<>"']/g, c => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -343,6 +444,34 @@ const beijingTime = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', second: '2-digit'
 });
+
+const beijingDate = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+});
+
+function timeText(iso) {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  return Number.isNaN(+date) ? '—' : beijingTime.format(date);
+}
+
+// 周起止原值可能是秒、毫秒或日期字符串；解析不了就原样显示。
+function dateText(value) {
+  if (value == null || value === '') return '';
+
+  const raw = String(value).trim();
+  const ms = /^\d{9,10}$/.test(raw) ? Number(raw) * 1000
+    : /^\d{12,13}$/.test(raw) ? Number(raw)
+    : Date.parse(raw);
+
+  return Number.isFinite(ms) ? beijingDate.format(new Date(ms)) : raw;
+}
+
+function periodText(w) {
+  const start = dateText(w.week_start);
+  const end = dateText(w.week_end);
+  return start || end ? `${start || '?'} ~ ${end || '?'}` : '—';
+}
 
 function message(text) {
   $('status').textContent = text;
@@ -361,20 +490,29 @@ function log(text) {
 
 function setLocked(locked) {
   document.querySelectorAll('[data-lock]').forEach(el => { el.disabled = locked; });
-  $('stop').disabled = !locked;
 }
 
 /* ---------- 高精度数字 ----------
    JSON 中的数字 token 保留为字符串，
-   积分比较、导出都不经过浮点取整。 */
+   积分比较、求和、导出都不经过浮点取整。 */
 
 function parseJSON(text) {
+  if (text.startsWith(BOM)) text = text.slice(1);
+
   return JSON.parse(
-    text.replace(/^\uFEFF/, '').replace(
+    text.replace(
       /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
       token => (token[0] === '"' ? token : JSON.stringify(token))
     )
   );
+}
+
+function normalize(d) {
+  while (d.s && d.n % 10n === 0n) {
+    d.n /= 10n;
+    d.s--;
+  }
+  return d;
 }
 
 // 解析为 { n: BigInt, s: 小数位数 }，无法解析返回 null。
@@ -395,40 +533,91 @@ function decimal(value) {
     s = 0;
   }
 
-  while (s && n % 10n === 0n) {
-    n /= 10n;
-    s--;
-  }
+  return normalize({ n, s });
+}
 
-  return { n, s };
+function decimalString(d) {
+  const digits = (d.n < 0n ? -d.n : d.n).toString().padStart(d.s + 1, '0');
+  const body = d.s ? `${digits.slice(0, -d.s)}.${digits.slice(-d.s)}` : digits;
+  return (d.n < 0n ? '-' : '') + body;
 }
 
 // 规范化为十进制字符串。
 function numeric(value) {
   const d = decimal(value);
-  if (!d) return null;
-
-  const digits = (d.n < 0n ? -d.n : d.n).toString().padStart(d.s + 1, '0');
-  const body = d.s ? `${digits.slice(0, -d.s)}.${digits.slice(-d.s)}` : digits;
-
-  return (d.n < 0n ? '-' : '') + body;
+  return d ? decimalString(d) : null;
 }
 
-function compare(a, b) {
-  const x = decimal(a);
-  const y = decimal(b);
+function align(x, y) {
   const s = Math.max(x.s, y.s);
-  const p = x.n * 10n ** BigInt(s - x.s);
-  const q = y.n * 10n ** BigInt(s - y.s);
+  return [x.n * 10n ** BigInt(s - x.s), y.n * 10n ** BigInt(s - y.s), s];
+}
 
+function compareDecimals(x, y) {
+  const [p, q] = align(x, y);
   return p > q ? 1 : p < q ? -1 : 0;
 }
 
+function addDecimals(x, y) {
+  const [p, q, s] = align(x, y);
+  return normalize({ n: p + q, s });
+}
+
+// 千分位显示，小数最多保留 4 位；接受字符串或 decimal 对象。
 function format(value) {
   if (value == null) return '—';
 
-  const [int, frac] = String(value).split('.');
+  const text = typeof value === 'object' ? decimalString(value) : String(value);
+  const [int, frac] = text.split('.');
+
   return int.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (frac ? '.' + frac.slice(0, 4) : '');
+}
+
+function pointsOf(w) {
+  if (!w || w.points === null) return null;
+
+  let d = weekDecimals.get(w);
+
+  if (d === undefined) {
+    d = decimal(w.points);
+    weekDecimals.set(w, d);
+  }
+
+  return d;
+}
+
+function totalOf(a) {
+  const cached = totalCache.get(a);
+  if (cached && cached.src === a.totalPoints) return cached.d;
+
+  const d = a.totalPoints === null ? null : decimal(a.totalPoints);
+  totalCache.set(a, { src: a.totalPoints, d });
+  return d;
+}
+
+// 所有已结算周的周积分之和（推荐积分不计入）。
+function settledSum(a) {
+  const cached = sumCache.get(a);
+  if (cached && cached.version === dataVersion) return cached;
+
+  let sum = null;
+  let count = 0;
+
+  if (a.status === 'ok') {
+    for (const w of a.weeks) {
+      if (w.calculated !== true) continue;
+
+      const d = pointsOf(w);
+      if (!d) continue;
+
+      count++;
+      sum = sum ? addDecimals(sum, d) : d;
+    }
+  }
+
+  const entry = { version: dataVersion, sum, count };
+  sumCache.set(a, entry);
+  return entry;
 }
 
 /* ---------- 数据模型 ---------- */
@@ -455,9 +644,29 @@ function weeksOf(list) {
       referral_points: numeric(w.referral_points),
       calculated: toBool(w.calculated),
       week_start: w.week_start ?? null,
-      week_end: w.week_end ?? null
+      week_end: w.week_end ?? null,
+      updatedAt: typeof w.updatedAt === 'string' ? w.updatedAt : null
     };
   });
+}
+
+// 按周号合并：新数据覆盖同一周，接口不再返回的历史周保留；
+// 新响应缺少周起止时间时沿用旧值。
+function mergeWeeks(oldWeeks, newWeeks, updatedAt) {
+  const byWeek = new Map(oldWeeks.map(w => [w.week, w]));
+
+  for (const w of newWeeks) {
+    const old = byWeek.get(w.week);
+
+    byWeek.set(w.week, {
+      ...w,
+      week_start: w.week_start ?? old?.week_start ?? null,
+      week_end: w.week_end ?? old?.week_end ?? null,
+      updatedAt
+    });
+  }
+
+  return [...byWeek.values()].sort((x, y) => x.week - y.week);
 }
 
 function accountOf(raw) {
@@ -483,6 +692,8 @@ function merge(a) {
   const key = a.address.toLowerCase();
   const old = accounts.get(key);
 
+  touch();
+
   if (!old) {
     accounts.set(key, a);
     return;
@@ -495,7 +706,7 @@ function merge(a) {
 function snapshot() {
   return {
     app: APP,
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     discovery,
     accounts: [...accounts.values()]
@@ -510,7 +721,7 @@ function restore(data) {
   const restored = data.accounts.map(raw => {
     const a = accountOf(raw);
 
-    a.weeks = weeksOf(raw.weeks);
+    a.weeks = weeksOf(raw.weeks).sort((x, y) => x.week - y.week);
     a.status = ['ok', 'error'].includes(raw.status) ? raw.status : 'pending';
     a.error = String(raw.error || '').slice(0, 500);
     a.fetchedAt = typeof raw.fetchedAt === 'string' ? raw.fetchedAt : '';
@@ -527,6 +738,7 @@ function restore(data) {
 
   accounts.clear();
   restored.forEach(a => accounts.set(a.address.toLowerCase(), a));
+  touch();
 
   discovery = d
     ? { cursor: d.cursor, pages: Number(d.pages) || 0, finished: d.finished === true, seen: d.seen }
@@ -569,17 +781,150 @@ async function save() {
   }
 }
 
-/* ---------- 排名与渲染 ---------- */
+/* ---------- 排名计算 ---------- */
 
-function stateOf(a, w) {
-  if (a.status === 'error') return 'error';
-  if (a.status !== 'ok') return 'pending';
+function weekState(w) {
   if (!w) return 'missing';
   if (w.calculated === false) return 'unsettled';
   if (w.calculated !== true) return 'unknown';
   if (w.points === null) return 'invalid';
   return 'ok';
 }
+
+function stateOf(a, w) {
+  if (a.status === 'error') return 'error';
+  if (a.status !== 'ok') return 'pending';
+  return weekState(w);
+}
+
+// 按 score（decimal 或 null）降序排名，同分并列（1、1、3）；返回可排名条数。
+function assignRanks(rows) {
+  let scale = 0;
+
+  for (const r of rows) {
+    if (r.score) scale = Math.max(scale, r.score.s);
+  }
+
+  for (const r of rows) {
+    r.scaled = r.score ? r.score.n * 10n ** BigInt(scale - r.score.s) : null;
+  }
+
+  rows.sort((x, y) => {
+    if (x.scaled === null || y.scaled === null) {
+      return Number(y.scaled !== null) - Number(x.scaled !== null) ||
+        x.a.address.localeCompare(y.a.address);
+    }
+
+    return y.scaled > x.scaled ? 1 : y.scaled < x.scaled ? -1 : x.a.address.localeCompare(y.a.address);
+  });
+
+  let rank = 0;
+  let ranked = 0;
+  let previous = null;
+
+  for (const r of rows) {
+    if (r.scaled === null) {
+      r.rank = '';
+      continue;
+    }
+
+    ranked++;
+    if (previous === null || r.scaled !== previous) rank = ranked;
+
+    r.rank = rank;
+    previous = r.scaled;
+  }
+
+  return ranked;
+}
+
+// 主表：所有地址在所选周与所选榜单下的一行数据。
+function buildRows(all, week, mode) {
+  const rows = all.map(a => {
+    const w = a.weeks.find(x => x.week === week);
+    const key = stateOf(a, w);
+    const { sum, count } = settledSum(a);
+
+    const r = {
+      a, w, key, sum, count,
+      state: STATES[key][0],
+      weekScore: key === 'ok' ? pointsOf(w) : null,
+      total: totalOf(a)
+    };
+
+    r.score = (mode === 'week' ? r.weekScore : mode === 'sum' ? r.sum : r.total) ?? null;
+    r.eligible = r.score !== null;
+
+    return r;
+  });
+
+  return { rows, ranked: assignRanks(rows) };
+}
+
+// 某一周的完整样本周排名（带缓存），供地址查询和全周导出使用。
+function weekRanking(week) {
+  let entry = rankCache.get(week);
+  if (entry) return entry;
+
+  const rows = [];
+
+  for (const a of accounts.values()) {
+    if (a.status !== 'ok') continue;
+
+    const w = a.weeks.find(x => x.week === week);
+    const score = w?.calculated === true ? pointsOf(w) : null;
+
+    if (score) rows.push({ a, score });
+  }
+
+  entry = { ranked: assignRanks(rows), ranks: new Map(rows.map(r => [r.a, r.rank])) };
+  rankCache.set(week, entry);
+  return entry;
+}
+
+// 每一周的样本统计（带缓存）。
+function weekSummaries() {
+  if (summaryCache) return summaryCache;
+
+  const byWeek = new Map();
+
+  for (const a of accounts.values()) {
+    for (const w of a.weeks) {
+      let s = byWeek.get(w.week);
+
+      if (!s) {
+        s = {
+          week: w.week, week_start: null, week_end: null,
+          records: 0, ranked: 0, top: null, topScore: null, sum: null, updatedAt: ''
+        };
+        byWeek.set(w.week, s);
+      }
+
+      s.records++;
+      s.week_start ??= w.week_start;
+      s.week_end ??= w.week_end;
+      if (w.updatedAt && w.updatedAt > s.updatedAt) s.updatedAt = w.updatedAt;
+
+      if (a.status !== 'ok' || w.calculated !== true) continue;
+
+      const d = pointsOf(w);
+      if (!d) continue;
+
+      s.ranked++;
+      s.sum = s.sum ? addDecimals(s.sum, d) : d;
+
+      if (!s.topScore || compareDecimals(d, s.topScore) > 0) {
+        s.topScore = d;
+        s.top = a;
+      }
+    }
+  }
+
+  summaryCache = [...byWeek.values()].sort((x, y) => y.week - x.week);
+  return summaryCache;
+}
+
+/* ---------- 渲染 ---------- */
 
 // 刷新周下拉框，返回当前选中的周号（0 表示暂无已结算周）。
 function syncWeekSelect(all) {
@@ -595,73 +940,77 @@ function syncWeekSelect(all) {
 
   const select = $('week');
   const selected = select.value;
+  const sorted = [...weeks].sort((a, b) => b - a);
+  const key = sorted.join(',');
 
-  select.innerHTML =
-    '<option value="latest">最新已结算周</option>' +
-    [...weeks].sort((a, b) => b - a).map(w => `<option value="${w}">第 ${w} 周</option>`).join('');
+  if (key !== weekOptionsKey) {
+    weekOptionsKey = key;
+    select.innerHTML =
+      '<option value="latest">最新已结算周</option>' +
+      sorted.map(w => `<option value="${w}">第 ${w} 周</option>`).join('');
+  }
 
   select.value = selected === 'latest' || weeks.has(Number(selected)) ? selected : 'latest';
 
   return select.value === 'latest' ? latest : Number(select.value);
 }
 
-// 计算所选周的样本排名，同分并列。
-function rankRows(all, week) {
-  const rows = all.map(a => {
-    const w = a.weeks.find(x => x.week === week);
-    const key = stateOf(a, w);
-
-    return { a, w, key, state: STATES[key][0], eligible: key === 'ok', rank: '' };
-  });
-
-  rows.sort((x, y) =>
-    Number(y.eligible) - Number(x.eligible) ||
-    (x.eligible && y.eligible ? compare(y.w.points, x.w.points) : 0) ||
-    x.a.address.localeCompare(y.a.address)
-  );
-
-  let rank = 0;
-  let ranked = 0;
-  let previous = null;
-
-  for (const r of rows) {
-    if (!r.eligible) continue;
-
-    ranked++;
-    if (previous === null || compare(r.w.points, previous) !== 0) rank = ranked;
-
-    r.rank = rank;
-    previous = r.w.points;
-  }
-
-  return { rows, ranked };
+function badge(key) {
+  return `<span class="badge badge-${STATES[key][1]}">${STATES[key][0]}</span>`;
 }
 
-function rowHTML(r) {
+function rowHTML(r, mode) {
   const a = r.a;
   const ok = a.status === 'ok';
-  const date = new Date(a.fetchedAt);
-  const time = Number.isNaN(+date) ? '—' : beijingTime.format(date);
+
+  const num = (basis, text, title) =>
+    `<td class="num${basis === mode ? ' basis' : ''}"${title ? ` title="${escapeHTML(title)}"` : ''}>${text}</td>`;
 
   return `
     <tr>
       <td class="rank${r.rank && r.rank <= 3 ? ' top' : ''}">${r.rank || '—'}</td>
       <td>${escapeHTML(a.name || '—')}</td>
-      <td class="addr">${escapeHTML(a.address)}</td>
-      <td class="num" title="${escapeHTML(ok ? r.w?.points : '')}">${ok ? format(r.w?.points) : '—'}</td>
-      <td class="num">${ok ? format(r.w?.referral_points) : '—'}</td>
-      <td class="num">${format(a.totalPoints)}</td>
-      <td title="${escapeHTML(a.error)}"><span class="badge badge-${STATES[r.key][1]}">${r.state}</span></td>
-      <td>${time}</td>
+      <td class="addr" title="点击查看该地址各周排名">${escapeHTML(a.address)}</td>
+      ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
+      ${num('', ok ? format(r.w?.referral_points) : '—')}
+      ${num('sum', format(r.sum), r.sum ? `${decimalString(r.sum)}（已结算 ${r.count} 周）` : '')}
+      ${num('total', format(a.totalPoints), a.totalPoints)}
+      <td title="${escapeHTML(a.error)}">${badge(r.key)}</td>
+      <td>${timeText(a.fetchedAt)}</td>
     </tr>`;
+}
+
+function weekRowHTML(s) {
+  const top = s.top
+    ? `${escapeHTML(s.top.name || '')} <span class="addr" title="${escapeHTML(s.top.address)}">${shortAddress(s.top.address)}</span>`
+    : '—';
+
+  return `
+    <tr${s.week === activeWeek ? ' class="active"' : ''}>
+      <td>第 ${s.week} 周</td>
+      <td>${escapeHTML(periodText(s))}</td>
+      <td class="num">${s.records.toLocaleString()} / ${s.ranked.toLocaleString()}</td>
+      <td>${top}</td>
+      <td class="num" title="${s.topScore ? escapeHTML(decimalString(s.topScore)) : ''}">${format(s.topScore)}</td>
+      <td class="num" title="${s.sum ? escapeHTML(decimalString(s.sum)) : ''}">${format(s.sum)}</td>
+      <td>${timeText(s.updatedAt)}</td>
+      <td><button class="small" data-week="${s.week}">查看周排名</button></td>
+    </tr>`;
+}
+
+function renderWeeks() {
+  $('weeksBody').innerHTML =
+    weekSummaries().map(weekRowHTML).join('') ||
+    '<tr><td class="empty" colspan="8">还没有周数据。查询地址后，这里会列出每一周的样本统计。</td></tr>';
 }
 
 function render() {
   const all = [...accounts.values()];
+  const mode = $('mode').value;
 
   activeWeek = syncWeekSelect(all);
 
-  const { rows, ranked } = rankRows(all, activeWeek);
+  const { rows, ranked } = buildRows(all, activeWeek, mode);
   lastRows = rows;
 
   $('s1').textContent = all.length.toLocaleString();
@@ -672,7 +1021,12 @@ function render() {
   $('coverage').textContent =
     `总榜已接收 ${discovery.pages} 页；` +
     (discovery.finished ? '已到接口游标末尾，仍不代表全网历史完整覆盖' : '尚未确认采集完成') +
-    `。当前选择：${activeWeek ? `第 ${activeWeek} 周` : '暂无已结算周'}。`;
+    `。当前榜单：${MODES[mode].label}；所选周：${activeWeek ? `第 ${activeWeek} 周` : '暂无已结算周'}。`;
+
+  $('rankHead').textContent = MODES[mode].head;
+  document.querySelectorAll('th[data-basis]').forEach(th => {
+    th.classList.toggle('basis', th.dataset.basis === mode);
+  });
 
   const query = $('search').value.trim().toLowerCase();
   const onlyEligible = $('settled').checked;
@@ -686,12 +1040,84 @@ function render() {
   page = Math.max(1, Math.min(page, pages));
 
   $('tbody').innerHTML =
-    filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(rowHTML).join('') ||
-    '<tr><td class="empty" colspan="8">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
+    filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(r => rowHTML(r, mode)).join('') ||
+    '<tr><td class="empty" colspan="9">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
 
   $('pageInfo').textContent = `${page} / ${pages} 页 · 筛选后 ${filtered.length} 条 · 每页 ${PAGE_SIZE} 条`;
   $('prev').disabled = page <= 1;
   $('next').disabled = page >= pages;
+
+  renderWeeks();
+}
+
+/* ---------- 地址各周排名查询 ---------- */
+
+function lookup(address = $('lookup').value.trim()) {
+  const box = $('lookupResult');
+  const note = text => { box.innerHTML = `<p class="muted">${escapeHTML(text)}</p>`; };
+
+  if (!validAddress(address)) return note('请输入完整的 0x 钱包地址（40 位十六进制）。');
+
+  const a = accounts.get(address.toLowerCase());
+  if (!a) return note('样本中没有这个地址；请先在第 1 步添加，并在第 2 步查询。');
+
+  const { sum, count } = settledSum(a);
+  const accountState = a.status === 'ok' ? '已查询' : a.status === 'error' ? `查询失败：${a.error}` : '待查询';
+
+  const meta = `
+    <div class="meta">
+      <div><b>${escapeHTML(a.name || '未命名')}</b> <span class="addr">${escapeHTML(a.address)}</span></div>
+      <div><span>查询状态</span> ${escapeHTML(accountState)}</div>
+      <div><span>累计总积分</span> ${format(a.totalPoints)}</div>
+      <div><span>已结算周合计</span> ${format(sum)}${count ? `（${count} 周）` : ''}</div>
+      <div><span>采集时间</span> ${timeText(a.fetchedAt)}</div>
+    </div>`;
+
+  if (!a.weeks.length) {
+    box.innerHTML = meta + '<p class="muted">该地址还没有周数据。</p>';
+    return;
+  }
+
+  const rows = [...a.weeks].sort((x, y) => y.week - x.week).map(w => {
+    const key = weekState(w);
+    let rankText = '—';
+
+    if (a.status === 'ok' && key === 'ok') {
+      const { ranked, ranks } = weekRanking(w.week);
+      rankText = `<b>${ranks.get(a)}</b> / ${ranked.toLocaleString()}`;
+    }
+
+    return `
+      <tr>
+        <td>第 ${w.week} 周</td>
+        <td>${escapeHTML(periodText(w))}</td>
+        <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
+        <td class="num">${format(w.referral_points)}</td>
+        <td>${badge(key)}</td>
+        <td class="num">${rankText}</td>
+        <td>${timeText(w.updatedAt)}</td>
+      </tr>`;
+  });
+
+  box.innerHTML = meta + `
+    <div class="tablebox compact">
+      <table class="auto">
+        <thead>
+          <tr>
+            <th>周</th><th>周期（北京时间）</th><th class="num">周积分</th><th class="num">推荐积分</th>
+            <th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
+          </tr>
+        </thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>
+    </div>
+    <p class="muted">${a.status === 'ok' ? '' : '该地址最近一次查询未成功，各周暂不参与排名；重新查询成功后恢复。'}</p>`;
+}
+
+function showLookup(address) {
+  $('lookup').value = address;
+  lookup(address);
+  $('lookupCard').scrollIntoView({ block: 'start' });
 }
 
 /* ---------- 网络请求 ---------- */
@@ -795,6 +1221,7 @@ async function run(work, needsPassword = false) {
 
   task = new AbortController();
   setLocked(true);
+  $('stop').disabled = false;
 
   try {
     await work(task.signal);
@@ -805,6 +1232,7 @@ async function run(work, needsPassword = false) {
     await save();
     task = null;
     setLocked(false);
+    $('stop').disabled = true;
     progress(0, 0);
     render();
   }
@@ -880,15 +1308,20 @@ function applyPoints(a, json) {
     throw new Error('响应地址与查询地址不一致。');
   }
 
-  a.weeks = weeksOf(body.weeks);
+  const weeks = weeksOf(body.weeks);
+  const now = new Date().toISOString();
+
+  a.weeks = mergeWeeks(a.weeks, weeks, now);
   a.status = 'ok';
   a.error = '';
-  a.fetchedAt = new Date().toISOString();
+  a.fetchedAt = now;
   a.totalPoints = numeric(body.leaderboard?.total_points ?? body.leaderboard?.totalPoints) ?? a.totalPoints;
 
   if (typeof body.name === 'string' && body.name) {
     a.name = body.name.slice(0, NAME_MAX);
   }
+
+  touch();
 }
 
 async function query(all, signal) {
@@ -916,6 +1349,8 @@ async function query(all, signal) {
 
       a.status = 'error';
       a.error = error.message;
+      touch();
+
       failures++;
       streak++;
 
@@ -933,7 +1368,7 @@ async function query(all, signal) {
     if (done < list.length) await wait(interval(), signal);
   }
 
-  message(`本轮查询结束：成功 ${done - failures} 个，失败 ${failures} 个。切换周无需重新查询。`);
+  message(`本轮查询结束：成功 ${done - failures} 个，失败 ${failures} 个。切换周或榜单无需重新查询。`);
 }
 
 /* ---------- 导入导出 ---------- */
@@ -949,43 +1384,90 @@ function download(name, content, type) {
 }
 
 function csvCell(value) {
-  let text = String(value ?? '');
+  let text = value != null && typeof value === 'object' ? decimalString(value) : String(value ?? '');
 
   // 避免名称或其他文本被表格软件当作公式执行。
-  if (/^[\s\u0000-\u001f]*[=+\-@]/.test(text)) text = "'" + text;
+  if (/^[\s\p{Cc}]*[=+\-@]/u.test(text)) text = "'" + text;
 
   return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadCSV(name, rows) {
+  download(name, BOM + rows.map(r => r.map(csvCell).join(',')).join('\r\n'), 'text/csv;charset=utf-8');
 }
 
 function exportCSV() {
   render();
 
-  if (!activeWeek) {
+  const mode = $('mode').value;
+
+  if (mode === 'week' && !activeWeek) {
     return message('暂无可导出的周；先查询地址或选择已有周。');
   }
 
   const rows = [[
-    '周', '样本周排名', '名称', '钱包地址', '周积分', '推荐积分',
-    '累计总积分（最近查询值）', '状态', '错误', '采集时间UTC', '周开始原值', '周结束原值'
+    '榜单', '所选周', '排名', '名称', '钱包地址', '周积分', '推荐积分', '已结算周合计', '已结算周数',
+    '累计总积分（最近查询值）', '所选周状态', '错误', '采集时间UTC', '周开始原值', '周结束原值'
   ]];
 
   for (const r of lastRows) {
     const ok = r.a.status === 'ok';
 
     rows.push([
-      activeWeek, r.rank, r.a.name, r.a.address,
+      MODES[mode].label, activeWeek || '', r.rank, r.a.name, r.a.address,
       ok ? r.w?.points : '', ok ? r.w?.referral_points : '',
-      r.a.totalPoints, r.state, r.a.error, r.a.fetchedAt, r.w?.week_start, r.w?.week_end
+      r.sum, r.count, r.a.totalPoints, r.state, r.a.error, r.a.fetchedAt, r.w?.week_start, r.w?.week_end
     ]);
   }
 
-  download(
-    `predict-week-${activeWeek}-sample.csv`,
-    '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n'),
-    'text/csv;charset=utf-8'
+  const name = mode === 'week' ? `predict-week-${activeWeek}-sample.csv` : `predict-${MODES[mode].file}-sample.csv`;
+  downloadCSV(name, rows);
+
+  message(`已导出「${MODES[mode].label}」榜单的全部 ${lastRows.length} 个地址，不受页面筛选和分页影响。`);
+}
+
+// 长表：每个地址每一周一行，含该周样本排名。
+function exportAllCSV() {
+  const items = [];
+
+  for (const a of accounts.values()) {
+    for (const w of a.weeks) {
+      const key = stateOf(a, w);
+      let rank = '';
+      let ranked = '';
+
+      if (key === 'ok') {
+        const entry = weekRanking(w.week);
+        rank = entry.ranks.get(a);
+        ranked = entry.ranked;
+      }
+
+      items.push({
+        week: w.week, rank, address: a.address,
+        cells: [
+          w.week, rank, ranked, a.name, a.address, w.points, w.referral_points,
+          STATES[key][0], w.week_start, w.week_end, w.updatedAt
+        ]
+      });
+    }
+  }
+
+  if (!items.length) {
+    return message('还没有任何周数据可导出。');
+  }
+
+  items.sort((x, y) =>
+    y.week - x.week ||
+    (x.rank || 1e9) - (y.rank || 1e9) ||
+    x.address.localeCompare(y.address)
   );
 
-  message(`已导出第 ${activeWeek} 周的全部 ${lastRows.length} 个地址，不受页面筛选和分页影响。`);
+  downloadCSV('predict-all-weeks-sample.csv', [
+    ['周', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
+    ...items.map(item => item.cells)
+  ]);
+
+  message(`已导出 ${weekSummaries().length} 周共 ${items.length} 条周记录。`);
 }
 
 function addAddresses(text) {
@@ -1032,6 +1514,7 @@ $('query').onclick = () => run(signal => query(false, signal), true);
 $('refresh').onclick = () => run(signal => query(true, signal), true);
 $('stop').onclick = () => task?.abort();
 $('csv').onclick = exportCSV;
+$('csvAll').onclick = exportAllCSV;
 
 $('password').onkeydown = event => {
   if (event.key === 'Enter') $('query').click();
@@ -1054,6 +1537,8 @@ $('clear').onclick = () => run(async () => {
 
   accounts.clear();
   discovery = emptyDiscovery();
+  touch();
+  $('lookupResult').innerHTML = '<p class="muted">数据已清空。</p>';
   message('已清空。');
 });
 
@@ -1067,7 +1552,7 @@ $('import').onclick = () => {
 
 $('file').onchange = () => run(() => importFile($('file').files[0]));
 
-$('week').onchange = $('settled').onchange = () => {
+$('mode').onchange = $('week').onchange = $('settled').onchange = () => {
   page = 1;
   render();
 };
@@ -1085,6 +1570,29 @@ $('search').oninput = () => {
 $('prev').onclick = () => { page--; render(); };
 $('next').onclick = () => { page++; render(); };
 
+// 点击主表中的地址 → 查看该地址各周排名。
+$('tbody').onclick = event => {
+  const cell = event.target.closest('td.addr');
+  if (cell) showLookup(cell.textContent.trim());
+};
+
+// 历史周概览中的“查看周排名”。
+$('weeksBody').onclick = event => {
+  const button = event.target.closest('button[data-week]');
+  if (!button) return;
+
+  $('mode').value = 'week';
+  $('week').value = button.dataset.week;
+  page = 1;
+  render();
+  $('ranking').scrollIntoView({ block: 'start' });
+};
+
+$('lookupBtn').onclick = () => lookup();
+$('lookup').onkeydown = event => {
+  if (event.key === 'Enter') lookup();
+};
+
 window.addEventListener('beforeunload', event => {
   if (task) {
     event.preventDefault();
@@ -1096,7 +1604,6 @@ window.addEventListener('beforeunload', event => {
 
 (async function init() {
   setLocked(true);
-  $('stop').disabled = true;
 
   try {
     db = await openDB();
