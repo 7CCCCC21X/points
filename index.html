@@ -184,15 +184,26 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
     </label>
 
     <label class="field">
+      <span>采集目标地址数</span>
+      <input id="targetCount" type="number" min="100" max="200000" step="100" value="10000" data-lock>
+    </label>
+
+    <label class="field">
       <span>本次最多采集页数</span>
-      <input id="maxPages" type="number" min="1" max="500" value="50" data-lock>
+      <input id="maxPages" type="number" min="1" max="2000" value="200" data-lock>
     </label>
 
     <div class="actions">
-      <button id="collect" data-lock>采集 / 继续采集总榜地址</button>
+      <button id="pipeline" class="primary" data-lock>一键：采集总榜并查询周积分</button>
+      <button id="collect" data-lock>仅采集 / 继续采集总榜地址</button>
       <button id="resetCursor" data-lock>重置总榜游标</button>
     </div>
   </div>
+
+  <p class="muted hint">
+    一键流程：按总榜顺序采集到目标地址数（默认前 10000 名）或游标到底，随后自动逐个查询每周积分，
+    全部缓存在本机。中途停止或刷新后再点一次即可从断点继续。
+  </p>
 
   <textarea id="addresses" data-lock
     placeholder="粘贴 0x 开头的钱包地址；每行一个，也可以粘贴包含地址的文本。只查询已有地址不需要官方 API Key。"></textarea>
@@ -221,7 +232,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 
     <label class="field">
       <span>请求间隔（毫秒）</span>
-      <input id="interval" type="number" min="500" max="10000" value="700" data-lock>
+      <input id="interval" type="number" min="350" max="10000" value="700" data-lock>
     </label>
 
     <div class="actions">
@@ -318,7 +329,8 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   <h2><span class="step">4</span>历史周概览</h2>
 
   <p class="muted hint">
-    本机已保存的每一周的样本统计。点击“查看周排名”切换到该周的周排名。
+    本机已保存的每一周的样本统计。周期按第 1 周 = 2025-12-16 22:00（北京时间）、每周 7 天推算，
+    接口返回了起止时间时以接口为准。点击“查看周排名”切换到该周的周排名。
   </p>
 
   <div class="tablebox compact">
@@ -377,6 +389,11 @@ const PAGE_SIZE = 100;
 const NAME_MAX = 160;
 const CURSOR_MAX = 4096;
 const LOG_MAX = 120;
+
+// 周号规则与 yuce 项目一致：W1 从 2025-12-16 14:00 UTC（北京时间 22:00）开始，
+// 每周 7 天；「本周」按当前时间推算，并与数据里见过的最大周号取大。
+const WEEK_ANCHOR_START_TS = 1765893600;
+const WEEK_SECONDS = 604800;
 
 const STATES = {
   ok:        ['已结算',     'ok'],
@@ -445,8 +462,9 @@ const beijingTime = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit', minute: '2-digit', second: '2-digit'
 });
 
-const beijingDate = new Intl.DateTimeFormat('zh-CN', {
-  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+const beijingMinute = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', hour12: false,
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
 });
 
 function timeText(iso) {
@@ -455,22 +473,37 @@ function timeText(iso) {
   return Number.isNaN(+date) ? '—' : beijingTime.format(date);
 }
 
-// 周起止原值可能是秒、毫秒或日期字符串；解析不了就原样显示。
-function dateText(value) {
-  if (value == null || value === '') return '';
+// 按当前时间推算的周号（至少为 1）。
+function currentWeekNumber() {
+  const now = Math.floor(Date.now() / 1000);
+  return Math.max(1, Math.floor((now - WEEK_ANCHOR_START_TS) / WEEK_SECONDS) + 1);
+}
+
+// 某周按锚点推算的起止时间（UTC 秒）。
+function weekBounds(week) {
+  const start = WEEK_ANCHOR_START_TS + (week - 1) * WEEK_SECONDS;
+  return { start, end: start + WEEK_SECONDS };
+}
+
+// 接口给的周起止原值可能是秒、毫秒或日期字符串；解析为毫秒，解析不了返回 null。
+function toMillis(value) {
+  if (value == null || value === '') return null;
 
   const raw = String(value).trim();
   const ms = /^\d{9,10}$/.test(raw) ? Number(raw) * 1000
     : /^\d{12,13}$/.test(raw) ? Number(raw)
     : Date.parse(raw);
 
-  return Number.isFinite(ms) ? beijingDate.format(new Date(ms)) : raw;
+  return Number.isFinite(ms) ? ms : null;
 }
 
-function periodText(w) {
-  const start = dateText(w.week_start);
-  const end = dateText(w.week_end);
-  return start || end ? `${start || '?'} ~ ${end || '?'}` : '—';
+// 周期（北京时间）：优先用接口返回的起止时间，缺失时按锚点推算。
+function periodText(week, w) {
+  const bounds = weekBounds(week);
+  const start = toMillis(w?.week_start) ?? bounds.start * 1000;
+  const end = toMillis(w?.week_end) ?? bounds.end * 1000;
+
+  return `${beijingMinute.format(new Date(start))} ~ ${beijingMinute.format(new Date(end))}`;
 }
 
 function message(text) {
@@ -677,10 +710,13 @@ function accountOf(raw) {
     throw new Error('记录缺少有效钱包地址。');
   }
 
+  const rank = Number(x.rank ?? x.position ?? x.leaderboard?.rank);
+
   return {
     address,
     name: String(x.name ?? x.username ?? '').slice(0, NAME_MAX),
-    totalPoints: numeric(x.totalPoints ?? x.total_points),
+    totalPoints: numeric(x.totalPoints ?? x.total_points ?? x.leaderboard?.total_points),
+    rank: Number.isInteger(rank) && rank > 0 ? rank : null,
     weeks: [],
     status: 'pending',
     error: '',
@@ -701,6 +737,7 @@ function merge(a) {
 
   if (a.name) old.name = a.name;
   if (a.totalPoints != null) old.totalPoints = a.totalPoints;
+  if (a.rank != null) old.rank = a.rank;
 }
 
 function snapshot() {
@@ -920,6 +957,16 @@ function weekSummaries() {
     }
   }
 
+  // 本周即使还没有数据也列出来，便于对照周期。
+  const current = currentWeekNumber();
+
+  if (!byWeek.has(current)) {
+    byWeek.set(current, {
+      week: current, week_start: null, week_end: null,
+      records: 0, ranked: 0, top: null, topScore: null, sum: null, updatedAt: ''
+    });
+  }
+
   summaryCache = [...byWeek.values()].sort((x, y) => y.week - x.week);
   return summaryCache;
 }
@@ -938,19 +985,27 @@ function syncWeekSelect(all) {
     }
   }
 
+  // 下拉框列出第 1 周到本周（或数据里更大的周号）的全部周，标出本周和没有记录的周。
+  const current = currentWeekNumber();
+  const maxWeek = Math.max(current, ...weeks);
   const select = $('week');
   const selected = select.value;
-  const sorted = [...weeks].sort((a, b) => b - a);
-  const key = sorted.join(',');
+  const key = `${maxWeek}|${current}|${[...weeks].sort((a, b) => a - b).join(',')}`;
 
   if (key !== weekOptionsKey) {
     weekOptionsKey = key;
-    select.innerHTML =
-      '<option value="latest">最新已结算周</option>' +
-      sorted.map(w => `<option value="${w}">第 ${w} 周</option>`).join('');
+
+    const options = [];
+    for (let w = maxWeek; w >= 1; w--) {
+      const tag = w === current ? '（本周）' : weeks.has(w) ? '' : '（无记录）';
+      options.push(`<option value="${w}">第 ${w} 周${tag}</option>`);
+    }
+
+    select.innerHTML = '<option value="latest">最新已结算周</option>' + options.join('');
   }
 
-  select.value = selected === 'latest' || weeks.has(Number(selected)) ? selected : 'latest';
+  const chosen = Number(selected);
+  select.value = selected === 'latest' || (chosen >= 1 && chosen <= maxWeek) ? selected : 'latest';
 
   return select.value === 'latest' ? latest : Number(select.value);
 }
@@ -985,10 +1040,12 @@ function weekRowHTML(s) {
     ? `${escapeHTML(s.top.name || '')} <span class="addr" title="${escapeHTML(s.top.address)}">${shortAddress(s.top.address)}</span>`
     : '—';
 
+  const tag = s.week === currentWeekNumber() ? ' <span class="badge badge-ok">本周</span>' : '';
+
   return `
     <tr${s.week === activeWeek ? ' class="active"' : ''}>
-      <td>第 ${s.week} 周</td>
-      <td>${escapeHTML(periodText(s))}</td>
+      <td>第 ${s.week} 周${tag}</td>
+      <td>${escapeHTML(periodText(s.week, s))}</td>
       <td class="num">${s.records.toLocaleString()} / ${s.ranked.toLocaleString()}</td>
       <td>${top}</td>
       <td class="num" title="${s.topScore ? escapeHTML(decimalString(s.topScore)) : ''}">${format(s.topScore)}</td>
@@ -1021,7 +1078,8 @@ function render() {
   $('coverage').textContent =
     `总榜已接收 ${discovery.pages} 页；` +
     (discovery.finished ? '已到接口游标末尾，仍不代表全网历史完整覆盖' : '尚未确认采集完成') +
-    `。当前榜单：${MODES[mode].label}；所选周：${activeWeek ? `第 ${activeWeek} 周` : '暂无已结算周'}。`;
+    `。当前榜单：${MODES[mode].label}；所选周：${activeWeek ? `第 ${activeWeek} 周` : '暂无已结算周'}；` +
+    `按周期推算现在是第 ${currentWeekNumber()} 周。`;
 
   $('rankHead').textContent = MODES[mode].head;
   document.querySelectorAll('th[data-basis]').forEach(th => {
@@ -1068,6 +1126,7 @@ function lookup(address = $('lookup').value.trim()) {
     <div class="meta">
       <div><b>${escapeHTML(a.name || '未命名')}</b> <span class="addr">${escapeHTML(a.address)}</span></div>
       <div><span>查询状态</span> ${escapeHTML(accountState)}</div>
+      <div><span>总榜名次</span> ${a.rank ?? '—'}</div>
       <div><span>累计总积分</span> ${format(a.totalPoints)}</div>
       <div><span>已结算周合计</span> ${format(sum)}${count ? `（${count} 周）` : ''}</div>
       <div><span>采集时间</span> ${timeText(a.fetchedAt)}</div>
@@ -1089,8 +1148,8 @@ function lookup(address = $('lookup').value.trim()) {
 
     return `
       <tr>
-        <td>第 ${w.week} 周</td>
-        <td>${escapeHTML(periodText(w))}</td>
+        <td>第 ${w.week} 周${w.week === currentWeekNumber() ? '（本周）' : ''}</td>
+        <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
         <td class="num">${format(w.referral_points)}</td>
         <td>${badge(key)}</td>
@@ -1238,41 +1297,63 @@ async function run(work, needsPassword = false) {
   }
 }
 
-const interval = () => clamp($('interval').value, 500, 10000, 700);
+const interval = () => clamp($('interval').value, 350, 10000, 700);
+const targetCount = () => clamp($('targetCount').value, 100, 200000, 10000);
 
-async function collect(signal) {
-  if (discovery.finished) {
-    return message('已到接口游标末尾；要重新采集，先重置游标。');
+// 总榜接口尚未实测，这里兼容几种常见的列表 / 游标字段名。
+function leaderboardPage(data) {
+  const body = data?.data && !Array.isArray(data.data) && typeof data.data === 'object' ? data.data : data;
+
+  const list = [body?.data, body?.items, body?.results, body?.leaderboard, body?.accounts, body?.users]
+    .find(Array.isArray);
+
+  const cursorKeys = ['cursor', 'nextCursor', 'next_cursor', 'endCursor', 'after'];
+  const holder = [body, body?.pageInfo, body?.page_info, body?.meta, data]
+    .find(x => x && cursorKeys.some(k => Object.hasOwn(x, k)));
+  const cursor = holder ? holder[cursorKeys.find(k => Object.hasOwn(holder, k))] : undefined;
+  const hasNext = holder?.hasNextPage ?? holder?.has_next_page;
+
+  if (!list) throw new Error('总榜响应里找不到地址列表（data / items / results），已停止。');
+  if (cursor !== undefined && cursor !== null && typeof cursor !== 'string') {
+    throw new Error('总榜响应的分页游标不是字符串，已停止。');
   }
 
-  const max = clamp($('maxPages').value, 1, 500, 50);
+  return { list, next: hasNext === false ? '' : (cursor || '') };
+}
+
+// 采集总榜地址：直到达到目标地址数、本次页数上限或游标到底。返回是否已满足目标。
+async function collect(signal) {
+  const target = targetCount();
+
+  if (accounts.size >= target) {
+    message(`已缓存 ${accounts.size} 个地址，达到目标 ${target}。`);
+    return true;
+  }
+
+  if (discovery.finished) {
+    message('已到接口游标末尾；要重新采集，先重置游标。');
+    return true;
+  }
+
+  const max = clamp($('maxPages').value, 1, 2000, 200);
 
   for (let i = 0; i < max; i++) {
-    message(`读取总榜第 ${discovery.pages + 1} 页…`);
-    progress(i, max);
+    message(`读取总榜第 ${discovery.pages + 1} 页…（已缓存 ${accounts.size} / 目标 ${target} 个地址）`);
+    progress(accounts.size, target);
 
     const data = await request('leaderboard', { after: discovery.cursor }, signal);
-
-    if (
-      !Array.isArray(data.data) ||
-      !Object.hasOwn(data, 'cursor') ||
-      (data.cursor !== null && typeof data.cursor !== 'string')
-    ) {
-      throw new Error('总榜响应不符合 data[] / cursor 结构，已停止。');
-    }
-
-    const next = data.cursor || '';
+    const { list, next } = leaderboardPage(data);
 
     if (next.length > CURSOR_MAX || (next && (next === discovery.cursor || discovery.seen.includes(next)))) {
       throw new Error('分页游标重复或无效，采集不完整。');
     }
 
-    if (!data.data.length && next) {
+    if (!list.length && next) {
       throw new Error('总榜返回空页但仍有游标，已停止。');
     }
 
     // 整页验证通过后才写入。
-    const batch = data.data.map(accountOf);
+    const batch = list.map(accountOf);
     batch.forEach(merge);
 
     discovery.pages++;
@@ -1286,13 +1367,33 @@ async function collect(signal) {
     await save();
 
     if (!next) {
-      return message('已到接口游标末尾。下一步点击“查询 / 继续未完成地址”。');
+      message(`已到接口游标末尾，共缓存 ${accounts.size} 个地址。`);
+      return true;
+    }
+
+    if (accounts.size >= target) {
+      message(`已缓存 ${accounts.size} 个地址，达到目标 ${target}。`);
+      return true;
     }
 
     await wait(interval(), signal);
   }
 
-  message('已达到本次采集页数限制，仍有后续页；点击采集按钮继续。');
+  message(`已达到本次采集页数限制（${max} 页），已缓存 ${accounts.size} 个地址；再点一次继续。`);
+  return false;
+}
+
+// 一键流程：采集到目标地址数后，自动逐个查询周积分。
+async function pipeline(signal) {
+  const reached = await collect(signal);
+
+  if (!reached) {
+    log('采集未达目标，本次不自动查询；再点“一键”继续。');
+    return;
+  }
+
+  await wait(interval(), signal);
+  await query(false, signal);
 }
 
 function applyPoints(a, json) {
@@ -1334,6 +1435,8 @@ async function query(all, signal) {
   let done = 0;
   let failures = 0;
   let streak = 0;
+  let lastRender = 0;
+  let lastSave = Date.now();
 
   for (const a of list) {
     if (signal.aborted) throw abortError();
@@ -1363,8 +1466,17 @@ async function query(all, signal) {
 
     done++;
 
-    if (done === 1 || done % 10 === 0) render();
-    if (done % 20 === 0) await save();
+    // 地址很多时，渲染和落盘按时间节流，避免每次都重算整表、重写整个快照。
+    if (done === 1 || Date.now() - lastRender > 3000) {
+      render();
+      lastRender = Date.now();
+    }
+
+    if (Date.now() - lastSave > 20000) {
+      await save();
+      lastSave = Date.now();
+    }
+
     if (done < list.length) await wait(interval(), signal);
   }
 
@@ -1406,7 +1518,7 @@ function exportCSV() {
   }
 
   const rows = [[
-    '榜单', '所选周', '排名', '名称', '钱包地址', '周积分', '推荐积分', '已结算周合计', '已结算周数',
+    '榜单', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '已结算周合计', '已结算周数',
     '累计总积分（最近查询值）', '所选周状态', '错误', '采集时间UTC', '周开始原值', '周结束原值'
   ]];
 
@@ -1414,7 +1526,7 @@ function exportCSV() {
     const ok = r.a.status === 'ok';
 
     rows.push([
-      MODES[mode].label, activeWeek || '', r.rank, r.a.name, r.a.address,
+      MODES[mode].label, activeWeek || '', r.rank, r.a.rank ?? '', r.a.name, r.a.address,
       ok ? r.w?.points : '', ok ? r.w?.referral_points : '',
       r.sum, r.count, r.a.totalPoints, r.state, r.a.error, r.a.fetchedAt, r.w?.week_start, r.w?.week_end
     ]);
@@ -1445,7 +1557,7 @@ function exportAllCSV() {
       items.push({
         week: w.week, rank, address: a.address,
         cells: [
-          w.week, rank, ranked, a.name, a.address, w.points, w.referral_points,
+          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points,
           STATES[key][0], w.week_start, w.week_end, w.updatedAt
         ]
       });
@@ -1463,7 +1575,7 @@ function exportAllCSV() {
   );
 
   downloadCSV('predict-all-weeks-sample.csv', [
-    ['周', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
+    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
     ...items.map(item => item.cells)
   ]);
 
@@ -1510,6 +1622,7 @@ async function importFile(file) {
 /* ---------- 事件绑定 ---------- */
 
 $('collect').onclick = () => run(collect, true);
+$('pipeline').onclick = () => run(pipeline, true);
 $('query').onclick = () => run(signal => query(false, signal), true);
 $('refresh').onclick = () => run(signal => query(true, signal), true);
 $('stop').onclick = () => task?.abort();
