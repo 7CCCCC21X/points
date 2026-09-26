@@ -247,12 +247,12 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 
     <label class="field">
       <span>并发数</span>
-      <input id="concurrency" type="number" min="1" max="6" value="3" data-lock>
+      <input id="concurrency" type="number" min="1" max="10" value="4" data-lock>
     </label>
 
     <label class="field">
       <span>请求间隔（毫秒）</span>
-      <input id="interval" type="number" min="150" max="10000" value="350" data-lock>
+      <input id="interval" type="number" min="100" max="10000" value="250" data-lock>
     </label>
 
     <div class="actions">
@@ -1159,8 +1159,13 @@ function render() {
   lastRows = rows;
 
   $('s1').textContent = all.length.toLocaleString();
-  $('s2').textContent =
-    `${all.filter(a => a.status === 'ok').length} / ${all.filter(a => a.status === 'error').length}`;
+  let okCount = 0;
+  let errCount = 0;
+  for (const a of all) {
+    if (a.status === 'ok') okCount++;
+    else if (a.status === 'error') errCount++;
+  }
+  $('s2').textContent = `${okCount.toLocaleString()} / ${errCount.toLocaleString()}`;
   $('s3').textContent = ranked.toLocaleString();
 
   $('coverage').textContent =
@@ -1387,9 +1392,9 @@ async function run(work, needsPassword = false) {
   }
 }
 
-const interval = () => clamp($('interval').value, 150, 10000, 350);
+const interval = () => clamp($('interval').value, 100, 10000, 250);
 const targetCount = () => clamp($('targetCount').value, 100, 200000, 10000);
-const concurrency = () => clamp($('concurrency').value, 1, 6, 3);
+const concurrency = () => clamp($('concurrency').value, 1, 10, 4);
 const queryPnl = () => $('queryPnl').checked;
 // 已从总榜采到的地址数（带名次的），手动导入的地址不算。
 const rankedCount = () => { let n = 0; for (const a of accounts.values()) if (a.rank != null) n++; return n; };
@@ -1595,11 +1600,20 @@ async function query(scope, signal) {
   const gap = interval();
   const startedAt = Date.now();
 
+  // 两条发车时刻表：积分接口一条，PNL 接口一条，各自保证 1 / 间隔 的速率。
+  const lanes = [0, 0];
+  const takeSlot = async (pnl = false) => {
+    const lane = pnl ? 1 : 0;
+    const now = Date.now();
+    const slot = Math.max(now, lanes[lane]);
+    lanes[lane] = slot + gap;
+    if (slot > now) await wait(slot - now, signal);
+  };
+
   let index = 0;
   let done = 0;
   let failures = 0;
   let streak = 0;
-  let nextSlot = 0;
   let lastRender = 0;
   let lastSave = Date.now();
   let stopError = null;
@@ -1612,20 +1626,19 @@ async function query(scope, signal) {
       if (i >= list.length) return;
 
       const a = list[i];
-      const now = Date.now();
-      const slot = Math.max(now, nextSlot);
-      nextSlot = slot + gap;
-      if (slot > now) await wait(slot - now, signal);
+      await takeSlot();
 
       try {
-        applyPoints(a, await request('points', { address: a.address }, signal));
-        streak = 0;
+        // 积分与 PNL 走不同上游，各自排队、同时发出，互不拖慢。
+        const pnlTask = queryPnl() && (a.pnl == null || a.status !== 'ok' || scope === 'all')
+          ? takeSlot(true).then(() => applyPnl(a, signal))
+          : null;
 
-        if (queryPnl()) {
-          const slot2 = Math.max(Date.now(), nextSlot);
-          nextSlot = slot2 + gap;
-          if (slot2 > Date.now()) await wait(slot2 - Date.now(), signal);
-          await applyPnl(a, signal);
+        try {
+          applyPoints(a, await request('points', { address: a.address }, signal));
+          streak = 0;
+        } finally {
+          if (pnlTask) await pnlTask.catch(error => { if (signal.aborted || error.fatal) throw error; });
         }
       } catch (error) {
         if (signal.aborted) throw error;
@@ -1654,12 +1667,15 @@ async function query(scope, signal) {
       progress(done, list.length);
 
       // 地址很多时，渲染和落盘按时间节流，避免每次都重算整表、重写整个快照。
-      if (done === 1 || Date.now() - lastRender > 3000) {
+      // 样本越大，整表重算越贵：按样本规模拉长重绘间隔。
+      const renderEvery = accounts.size > 20000 ? 15000 : accounts.size > 5000 ? 8000 : 3000;
+
+      if (done === 1 || Date.now() - lastRender > renderEvery) {
         render();
         lastRender = Date.now();
       }
 
-      if (Date.now() - lastSave > 20000) {
+      if (Date.now() - lastSave > 60000) {
         lastSave = Date.now();
         await save();
       }

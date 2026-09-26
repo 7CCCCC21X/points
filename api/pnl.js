@@ -19,7 +19,7 @@ const MAX_PAGES = 25;
 const ALL_INTERVAL_CANDIDATES = ['MAX', 'ALL', '_ALL', '_MAX', 'ALL_TIME'];
 let resolvedAllInterval = 'MAX';
 
-const throttle = createThrottle(8, 8);
+const throttle = createThrottle(15, 15);
 
 const QUERY = `query GetAccountPnlTimeseries($address: Address!, $filter: TimeseriesFilterInput!, $pagination: ForwardPaginationInput) {
   account(address: $address) {
