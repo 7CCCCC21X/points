@@ -233,6 +233,11 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
       <button id="stop" disabled>停止</button>
     </div>
 
+    <label class="check">
+      <input id="topOnly" type="checkbox" checked data-lock>
+      只查总榜前 N 名（N = 采集目标地址数）
+    </label>
+
     <label class="field">
       <span>并发数</span>
       <input id="concurrency" type="number" min="1" max="6" value="3" data-lock>
@@ -257,7 +262,8 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 
   <p class="muted hint">
     接口一次返回地址的全部周，每次查询都按周合并保存：已结算的历史周永久留在本机缓存，随时可看。
-    “更新到最新周”只查未成功的地址和本周开始前查过的地址（它们可能多出一个新结算周），其余地址跳过。
+    勾选“只查总榜前 N 名”时，三个查询按钮和一键流程都只处理总榜名次 ≤ 采集目标数的地址，
+    手动导入、没有名次的地址不会被查。“更新到最新周”只查未成功的地址和本周开始前查过的地址，其余跳过。
     整体速率 = 1 / 请求间隔，并发只影响同时在途的请求数；上游限流时会自动退避。
   </p>
 </section>
@@ -1371,8 +1377,13 @@ async function collect(signal) {
       throw new Error('总榜返回空页但仍有游标，已停止。');
     }
 
-    // 整页验证通过后才写入。
-    const batch = list.map(accountOf);
+    // 整页验证通过后才写入。接口没给名次时，按总榜顺序补上名次。
+    const offset = discovery.pages * list.length;
+    const batch = list.map((item, i) => {
+      const a = accountOf(item);
+      if (a.rank == null) a.rank = offset + i + 1;
+      return a;
+    });
     batch.forEach(merge);
 
     discovery.pages++;
@@ -1457,15 +1468,26 @@ function needsQuery(a, scope) {
 // 并发查询：多个 worker 共用一个发车时刻表，整体速率 = 1 / 请求间隔，
 // 同时在途的请求数 = 并发数。已结算周的数据合并保存，不会重复请求。
 async function query(scope, signal) {
-  const list = [...accounts.values()].filter(a => needsQuery(a, scope));
+  const topOnly = $('topOnly').checked;
+  const target = targetCount();
+  const inScope = a => !topOnly || (a.rank != null && a.rank <= target);
+  const ranked = [...accounts.values()].filter(inScope);
+
+  if (topOnly && !ranked.length) {
+    return message('没有带总榜名次的地址：请先点“一键”或“仅采集”从总榜采集，或取消“只查总榜前 N 名”。');
+  }
+
+  const list = ranked.filter(a => needsQuery(a, scope)).sort((x, y) => (x.rank ?? 1e9) - (y.rank ?? 1e9));
 
   if (!list.length) {
     return message(
       scope === 'stale'
-        ? '所有地址都已在本周内查询过，没有需要更新的地址。'
-        : '没有需要查询的地址。请先添加地址，或使用“重新查询全部地址”。'
+        ? `范围内的 ${ranked.length} 个地址都已在本周内查询过，没有需要更新的地址。`
+        : `范围内的 ${ranked.length} 个地址都已查询成功；要重查请用“重新查询全部地址”。`
     );
   }
+
+  if (topOnly) log(`本轮只查总榜前 ${target} 名：范围内 ${ranked.length} 个地址，待查 ${list.length} 个。`);
 
   const workers = Math.min(concurrency(), list.length);
   const gap = interval();
