@@ -110,6 +110,8 @@ table{border-collapse:separate;border-spacing:0;min-width:1380px;width:100%;font
 table.auto{min-width:860px}
 th,td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;vertical-align:middle}
 th{position:sticky;top:0;z-index:1;background:var(--card-2);font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+th[data-basis]{cursor:pointer;user-select:none}
+th[data-basis]:hover{color:var(--accent)}
 th.basis{color:var(--accent)}
 td.basis{background:color-mix(in srgb,var(--accent) 7%,transparent);font-weight:600}
 tbody tr:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
@@ -335,12 +337,12 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
           <th id="rankHead">周排名</th>
           <th>名称</th>
           <th>钱包地址</th>
-          <th class="num" data-basis="week">周积分</th>
+          <th class="num" data-basis="week" data-label="周积分" title="点击按此列排名，再点切换升降序">周积分</th>
           <th class="num">推荐积分</th>
-          <th class="num" data-basis="pnl">周 PNL (USD)</th>
-          <th class="num" data-basis="pnlTotal">累计 PNL (USD)</th>
-          <th class="num" data-basis="sum">已结算周合计</th>
-          <th class="num" data-basis="total">累计总积分*</th>
+          <th class="num" data-basis="pnl" data-label="周 PNL (USD)" title="点击按此列排名，再点切换升降序">周 PNL (USD)</th>
+          <th class="num" data-basis="pnlTotal" data-label="累计 PNL (USD)" title="点击按此列排名，再点切换升降序">累计 PNL (USD)</th>
+          <th class="num" data-basis="sum" data-label="已结算周合计" title="点击按此列排名，再点切换升降序">已结算周合计</th>
+          <th class="num" data-basis="total" data-label="累计总积分*" title="点击按此列排名，再点切换升降序">累计总积分*</th>
           <th>所选周状态</th>
           <th>采集时间（北京时间）</th>
         </tr>
@@ -356,6 +358,8 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   </div>
 
   <p class="muted hint">
+    周积分以接口最近一次返回为准：官方会修订或清零（如刷单）积分，接口不再返回的周会标为“接口已不返回”并退出排名与合计，
+    因此本机合计与官网各周总计只在样本覆盖完整、且全部重查过后才接近。
     *累计积分取最近一次地址查询的 leaderboard 字段，没有则使用采集总榜的值；不是该历史周末的累计值。
     推荐积分单列，不加进周积分和合计，也不乘 1.1。
   </p>
@@ -439,7 +443,8 @@ const STATES = {
   invalid:   ['积分无效',   'err'],
   error:     ['查询失败',   'err'],
   pending:   ['待查询',     'muted'],
-  missing:   ['该周无记录', 'muted']
+  missing:   ['该周无记录', 'muted'],
+  dropped:   ['接口已不返回', 'warn']
 };
 
 const MODES = {
@@ -677,7 +682,7 @@ function settledSum(a) {
 
   if (a.status === 'ok') {
     for (const w of a.weeks) {
-      if (w.calculated !== true) continue;
+      if (!settledWeek(w)) continue;
 
       const d = pointsOf(w);
       if (!d) continue;
@@ -717,15 +722,18 @@ function weeksOf(list) {
       calculated: toBool(w.calculated),
       week_start: w.week_start ?? null,
       week_end: w.week_end ?? null,
-      updatedAt: typeof w.updatedAt === 'string' ? w.updatedAt : null
+      updatedAt: typeof w.updatedAt === 'string' ? w.updatedAt : null,
+      // 最近一次成功查询里接口没再返回这一周（官方可能已修订/清零）。
+      droppedAt: typeof w.droppedAt === 'string' ? w.droppedAt : null
     };
   });
 }
 
-// 按周号合并：新数据覆盖同一周，接口不再返回的历史周保留；
+// 按周号合并：新数据覆盖同一周；接口不再返回的历史周保留但标记 droppedAt，
+// 不再参与排名与合计（官方会修订或清零积分，以接口最新返回为准）。
 // 新响应缺少周起止时间时沿用旧值。
 function mergeWeeks(oldWeeks, newWeeks, updatedAt) {
-  const byWeek = new Map(oldWeeks.map(w => [w.week, w]));
+  const byWeek = new Map(oldWeeks.map(w => [w.week, { ...w, droppedAt: w.droppedAt ?? updatedAt }]));
 
   for (const w of newWeeks) {
     const old = byWeek.get(w.week);
@@ -734,7 +742,8 @@ function mergeWeeks(oldWeeks, newWeeks, updatedAt) {
       ...w,
       week_start: w.week_start ?? old?.week_start ?? null,
       week_end: w.week_end ?? old?.week_end ?? null,
-      updatedAt
+      updatedAt,
+      droppedAt: null
     });
   }
 
@@ -918,8 +927,12 @@ async function save() {
 
 /* ---------- 排名计算 ---------- */
 
+// 参与排名/合计的有效结算周。
+const settledWeek = w => w.calculated === true && !w.droppedAt;
+
 function weekState(w) {
   if (!w) return 'missing';
+  if (w.droppedAt) return 'dropped';
   if (w.calculated === false) return 'unsettled';
   if (w.calculated !== true) return 'unknown';
   if (w.points === null) return 'invalid';
@@ -1018,7 +1031,7 @@ function weekRanking(week) {
     if (a.status !== 'ok') continue;
 
     const w = a.weeks.find(x => x.week === week);
-    const score = w?.calculated === true ? pointsOf(w) : null;
+    const score = w && settledWeek(w) ? pointsOf(w) : null;
 
     if (score) rows.push({ a, score });
   }
@@ -1051,7 +1064,7 @@ function weekSummaries() {
       s.week_end ??= w.week_end;
       if (w.updatedAt && w.updatedAt > s.updatedAt) s.updatedAt = w.updatedAt;
 
-      if (a.status !== 'ok' || w.calculated !== true) continue;
+      if (a.status !== 'ok' || !settledWeek(w)) continue;
 
       const d = pointsOf(w);
       if (!d) continue;
@@ -1090,7 +1103,7 @@ function syncWeekSelect(all) {
   for (const a of all) {
     for (const w of a.weeks) {
       weeks.add(w.week);
-      if (a.status === 'ok' && w.calculated === true) latest = Math.max(latest, w.week);
+      if (a.status === 'ok' && settledWeek(w)) latest = Math.max(latest, w.week);
     }
   }
 
@@ -1199,8 +1212,11 @@ function render() {
     `按周期推算现在是第 ${currentWeekNumber()} 周。`;
 
   $('rankHead').textContent = MODES[mode].head + ($('order').value === 'asc' ? '（升序）' : '');
+  const arrow = $('order').value === 'asc' ? ' ▲' : ' ▼';
   document.querySelectorAll('th[data-basis]').forEach(th => {
-    th.classList.toggle('basis', th.dataset.basis === mode);
+    const active = th.dataset.basis === mode;
+    th.classList.toggle('basis', active);
+    th.textContent = th.dataset.label + (active ? arrow : '');
   });
 
   const query = $('search').value.trim().toLowerCase();
@@ -1558,7 +1574,7 @@ function latestSettledWeek() {
   let latest = 0;
   for (const a of accounts.values()) {
     if (a.status !== 'ok') continue;
-    for (const w of a.weeks) if (w.calculated === true && w.week > latest) latest = w.week;
+    for (const w of a.weeks) if (settledWeek(w) && w.week > latest) latest = w.week;
   }
   return latest;
 }
@@ -1576,7 +1592,7 @@ function needsQuery(a, scope, settled = latestSettledWeek()) {
     return !Number.isFinite(fetched) || fetched < weekBounds(currentWeekNumber()).start * 1000;
   }
 
-  return !a.weeks.some(w => w.week === settled && w.calculated === true);
+  return !a.weeks.some(w => w.week === settled && settledWeek(w));
 }
 
 // 并发查询：多个 worker 共用一个发车时刻表，整体速率 = 1 / 请求间隔，
@@ -1728,8 +1744,8 @@ function download(name, content, type) {
 function csvCell(value) {
   let text = value != null && typeof value === 'object' ? decimalString(value) : String(value ?? '');
 
-  // 避免名称或其他文本被表格软件当作公式执行。
-  if (/^[\s\p{Cc}]*[=+\-@]/u.test(text)) text = "'" + text;
+  // 避免名称或其他文本被表格软件当作公式执行；纯数字（含负数）不加前缀。
+  if (/^[\s\p{Cc}]*[=+\-@]/u.test(text) && !/^-?\d+(\.\d+)?$/.test(text)) text = "'" + text;
 
   return `"${text.replace(/"/g, '""')}"`;
 }
@@ -1919,6 +1935,22 @@ $('next').onclick = () => { page++; render(); };
 $('tbody').onclick = event => {
   const cell = event.target.closest('td.name-link');
   if (cell) showLookup(cell.parentElement.querySelector('td.addr').textContent.trim());
+};
+
+// 点击表头：切换到该列的榜单；再点同一列切换升降序。
+document.querySelector('#ranking thead').onclick = event => {
+  const th = event.target.closest('th[data-basis]');
+  if (!th) return;
+
+  if ($('mode').value === th.dataset.basis) {
+    $('order').value = $('order').value === 'asc' ? 'desc' : 'asc';
+  } else {
+    $('mode').value = th.dataset.basis;
+    $('order').value = 'desc';
+  }
+
+  page = 1;
+  render();
 };
 
 // 历史周概览中的“查看周排名”。
