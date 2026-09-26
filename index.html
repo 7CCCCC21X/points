@@ -106,7 +106,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 
 .tablebox{max-height:600px;overflow:auto;margin-top:14px;border:1px solid var(--line);border-radius:10px;background:var(--bg-2)}
 .tablebox.compact{max-height:380px}
-table{border-collapse:separate;border-spacing:0;min-width:1180px;width:100%;font-variant-numeric:tabular-nums}
+table{border-collapse:separate;border-spacing:0;min-width:1280px;width:100%;font-variant-numeric:tabular-nums}
 table.auto{min-width:860px}
 th,td{padding:10px 14px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;vertical-align:middle}
 th{position:sticky;top:0;z-index:1;background:var(--card-2);font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.02em}
@@ -130,6 +130,8 @@ td.empty{text-align:center;color:var(--muted);padding:32px;white-space:normal}
 .badge-warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
 .badge-err{color:var(--err);background:color-mix(in srgb,var(--err) 14%,transparent)}
 .badge-muted{color:var(--muted);background:color-mix(in srgb,var(--muted) 14%,transparent)}
+.pnl-pos{color:var(--ok)}
+.pnl-neg{color:var(--err)}
 
 .meta{
   display:flex;flex-wrap:wrap;gap:6px 20px;margin:14px 0 0;padding:12px 14px;
@@ -238,6 +240,11 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
       只查总榜前 N 名（N = 采集目标地址数）
     </label>
 
+    <label class="check">
+      <input id="queryPnl" type="checkbox" checked data-lock>
+      同时查询官网 PNL（按周切分）
+    </label>
+
     <label class="field">
       <span>并发数</span>
       <input id="concurrency" type="number" min="1" max="6" value="3" data-lock>
@@ -262,6 +269,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 
   <p class="muted hint">
     接口一次返回地址的全部周，每次查询都按周合并保存：已结算的历史周永久留在本机缓存，随时可看。
+    勾选“同时查询官网 PNL”时每个地址多一次请求，取官网 Portfolio 的累计 PNL 时序，按周起止时间相减得到周 PNL（需在 Vercel 配置 PREDICT_GRAPHQL_AUTH / COOKIE）。
     勾选“只查总榜前 N 名”时，三个查询按钮和一键流程都只处理总榜名次 ≤ 采集目标数的地址，
     手动导入、没有名次的地址不会被查。“更新到最新周”只查未成功的地址和本周开始前查过的地址，其余跳过。
     整体速率 = 1 / 请求间隔，并发只影响同时在途的请求数；上游限流时会自动退避。
@@ -319,6 +327,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
           <th>钱包地址</th>
           <th class="num" data-basis="week">周积分</th>
           <th class="num">推荐积分</th>
+          <th class="num">周 PNL (USD)</th>
           <th class="num" data-basis="sum">已结算周合计</th>
           <th class="num" data-basis="total">累计总积分*</th>
           <th>所选周状态</th>
@@ -737,9 +746,61 @@ function accountOf(raw) {
     weeks: [],
     status: 'pending',
     error: '',
-    fetchedAt: ''
+    fetchedAt: '',
+    pnl: null
   };
 }
+
+// 官网 PNL 时序：points 为 [秒, 累计 USD] 对，升序。
+function pnlOf(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.points)) return null;
+
+  const points = raw.points
+    .map(pt => {
+      let x = Number(Array.isArray(pt) ? pt[0] : pt?.x);
+      const y = Number(Array.isArray(pt) ? pt[1] : pt?.y);
+      if (x > 1e11) x /= 1000;
+      return [x, y];
+    })
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+    .sort((a, b) => a[0] - b[0]);
+
+  return {
+    points,
+    total: Number.isFinite(Number(raw.total)) ? Number(raw.total) : (points.length ? points[points.length - 1][1] : null),
+    error: typeof raw.error === 'string' ? raw.error.slice(0, 300) : '',
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : ''
+  };
+}
+
+// 某一周的官网 PNL = 周末累计值 − 周初累计值；没有时序返回 null。
+function weekPnl(a, week, w) {
+  const points = a.pnl?.points;
+  if (!points?.length) return null;
+
+  const bounds = weekBounds(week);
+  const start = (toMillis(w?.week_start) ?? bounds.start * 1000) / 1000;
+  const end = (toMillis(w?.week_end) ?? bounds.end * 1000) / 1000;
+
+  const cumAt = t => {
+    let v = 0;
+    for (const [x, y] of points) {
+      if (x <= t) v = y;
+      else break;
+    }
+    return v;
+  };
+
+  return Number((cumAt(end) - cumAt(start)).toFixed(4));
+}
+
+function pnlText(value) {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const text = Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return value > 0 ? `+${text}` : value < 0 ? `-${text}` : text;
+}
+
+const pnlClass = value => (value > 0 ? ' pnl-pos' : value < 0 ? ' pnl-neg' : '');
 
 function merge(a) {
   const key = a.address.toLowerCase();
@@ -779,6 +840,7 @@ function restore(data) {
     a.status = ['ok', 'error'].includes(raw.status) ? raw.status : 'pending';
     a.error = String(raw.error || '').slice(0, 500);
     a.fetchedAt = typeof raw.fetchedAt === 'string' ? raw.fetchedAt : '';
+    a.pnl = pnlOf(raw.pnl);
 
     return a;
   });
@@ -909,7 +971,8 @@ function buildRows(all, week, mode) {
       a, w, key, sum, count,
       state: STATES[key][0],
       weekScore: key === 'ok' ? pointsOf(w) : null,
-      total: totalOf(a)
+      total: totalOf(a),
+      pnl: week ? weekPnl(a, week, w) : null
     };
 
     r.score = (mode === 'week' ? r.weekScore : mode === 'sum' ? r.sum : r.total) ?? null;
@@ -1052,6 +1115,7 @@ function rowHTML(r, mode) {
         title="在 predict.fun 打开该地址的 portfolio">${escapeHTML(a.address)}</a></td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
       ${num('', ok ? format(r.w?.referral_points) : '—')}
+      <td class="num${pnlClass(r.pnl)}" title="${escapeHTML(a.pnl?.error || (a.pnl?.total != null ? `累计 PNL ${pnlText(a.pnl.total)}` : ''))}">${pnlText(r.pnl)}</td>
       ${num('sum', format(r.sum), r.sum ? `${decimalString(r.sum)}（已结算 ${r.count} 周）` : '')}
       ${num('total', format(a.totalPoints), a.totalPoints)}
       <td title="${escapeHTML(a.error)}">${badge(r.key)}</td>
@@ -1123,7 +1187,7 @@ function render() {
 
   $('tbody').innerHTML =
     filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(r => rowHTML(r, mode)).join('') ||
-    '<tr><td class="empty" colspan="9">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
+    '<tr><td class="empty" colspan="10">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
 
   $('pageInfo').textContent = `${page} / ${pages} 页 · 筛选后 ${filtered.length} 条 · 每页 ${PAGE_SIZE} 条`;
   $('prev').disabled = page <= 1;
@@ -1153,6 +1217,7 @@ function lookup(address = $('lookup').value.trim()) {
       <div><span>总榜名次</span> ${a.rank ?? '—'}</div>
       <div><span>累计总积分</span> ${format(a.totalPoints)}</div>
       <div><span>已结算周合计</span> ${format(sum)}${count ? `（${count} 周）` : ''}</div>
+      <div><span>官网累计 PNL</span> <b class="${pnlClass(a.pnl?.total)}">${pnlText(a.pnl?.total)}</b>${a.pnl?.error ? `（${escapeHTML(a.pnl.error)}）` : ''}</div>
       <div><span>采集时间</span> ${timeText(a.fetchedAt)}</div>
     </div>`;
 
@@ -1176,6 +1241,7 @@ function lookup(address = $('lookup').value.trim()) {
         <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
         <td class="num">${format(w.referral_points)}</td>
+        <td class="num${pnlClass(weekPnl(a, w.week, w))}">${pnlText(weekPnl(a, w.week, w))}</td>
         <td>${badge(key)}</td>
         <td class="num">${rankText}</td>
         <td>${timeText(w.updatedAt)}</td>
@@ -1188,7 +1254,7 @@ function lookup(address = $('lookup').value.trim()) {
         <thead>
           <tr>
             <th>周</th><th>周期（北京时间）</th><th class="num">周积分</th><th class="num">推荐积分</th>
-            <th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
+            <th class="num">周 PNL (USD)</th><th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
           </tr>
         </thead>
         <tbody>${rows.join('')}</tbody>
@@ -1251,7 +1317,7 @@ async function fetchProxy(url, signal) {
 }
 
 async function request(action, params, signal) {
-  const url = '/api/weekly?' + new URLSearchParams({ action, ...params });
+  const url = (action === 'pnl' ? '/api/pnl?' : '/api/weekly?') + new URLSearchParams(action === 'pnl' ? params : { action, ...params });
 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (signal.aborted) throw abortError();
@@ -1324,6 +1390,7 @@ async function run(work, needsPassword = false) {
 const interval = () => clamp($('interval').value, 150, 10000, 350);
 const targetCount = () => clamp($('targetCount').value, 100, 200000, 10000);
 const concurrency = () => clamp($('concurrency').value, 1, 6, 3);
+const queryPnl = () => $('queryPnl').checked;
 // 已从总榜采到的地址数（带名次的），手动导入的地址不算。
 const rankedCount = () => { let n = 0; for (const a of accounts.values()) if (a.rank != null) n++; return n; };
 
@@ -1457,18 +1524,50 @@ function applyPoints(a, json) {
   touch();
 }
 
-// 查询范围：pending = 未成功的地址；stale = 未成功 + 本周开始前查过的地址（可能有新结算周）；all = 全部。
-function needsQuery(a, scope) {
+// 样本里已经出现的最新结算周（有任一地址该周 calculated=true）。
+function latestSettledWeek() {
+  let latest = 0;
+  for (const a of accounts.values()) {
+    if (a.status !== 'ok') continue;
+    for (const w of a.weeks) if (w.calculated === true && w.week > latest) latest = w.week;
+  }
+  return latest;
+}
+
+// 查询范围：pending = 未成功的地址；
+// stale = 未成功 + 还没有最新结算周记录的地址（周结算后才查过的地址会带上该周，其余需要补查）；
+// all = 全部。
+function needsQuery(a, scope, settled = latestSettledWeek()) {
   if (scope === 'all' || a.status !== 'ok') return true;
   if (scope !== 'stale') return false;
+  if (queryPnl() && !a.pnl) return true;
 
-  const weekStart = weekBounds(currentWeekNumber()).start * 1000;
-  const fetched = Date.parse(a.fetchedAt);
-  return !Number.isFinite(fetched) || fetched < weekStart;
+  if (!settled) {
+    const fetched = Date.parse(a.fetchedAt);
+    return !Number.isFinite(fetched) || fetched < weekBounds(currentWeekNumber()).start * 1000;
+  }
+
+  return !a.weeks.some(w => w.week === settled && w.calculated === true);
 }
 
 // 并发查询：多个 worker 共用一个发车时刻表，整体速率 = 1 / 请求间隔，
 // 同时在途的请求数 = 并发数。已结算周的数据合并保存，不会重复请求。
+// 官网 PNL 失败不影响积分结果，只记录在 a.pnl.error 里。
+async function applyPnl(a, signal) {
+  try {
+    const data = await request('pnl', { address: a.address }, signal);
+    a.pnl = pnlOf({ points: data.points, total: data.pnlUsd, updatedAt: new Date().toISOString() });
+  } catch (error) {
+    if (signal.aborted) throw error;
+
+    // 未交易的地址：官网无时序，记为空时序，避免每次都重查。
+    const empty = /没有该地址的 PNL 时序/.test(error.message);
+    a.pnl = pnlOf({ points: [], error: empty ? '' : error.message, updatedAt: new Date().toISOString() });
+    if (!empty) log(`${a.address}：PNL ${error.message}`);
+    if (error.fatal) throw error;
+  }
+}
+
 async function query(scope, signal) {
   const topOnly = $('topOnly').checked;
   const target = targetCount();
@@ -1479,12 +1578,13 @@ async function query(scope, signal) {
     return message('没有带总榜名次的地址：请先点“一键”或“仅采集”从总榜采集，或取消“只查总榜前 N 名”。');
   }
 
-  const list = ranked.filter(a => needsQuery(a, scope)).sort((x, y) => (x.rank ?? 1e9) - (y.rank ?? 1e9));
+  const settled = latestSettledWeek();
+  const list = ranked.filter(a => needsQuery(a, scope, settled)).sort((x, y) => (x.rank ?? 1e9) - (y.rank ?? 1e9));
 
   if (!list.length) {
     return message(
       scope === 'stale'
-        ? `范围内的 ${ranked.length} 个地址都已在本周内查询过，没有需要更新的地址。`
+        ? `范围内的 ${ranked.length} 个地址都已包含最新结算周${settled ? `（第 ${settled} 周）` : ''}，没有需要更新的地址。`
         : `范围内的 ${ranked.length} 个地址都已查询成功；要重查请用“重新查询全部地址”。`
     );
   }
@@ -1520,6 +1620,13 @@ async function query(scope, signal) {
       try {
         applyPoints(a, await request('points', { address: a.address }, signal));
         streak = 0;
+
+        if (queryPnl()) {
+          const slot2 = Math.max(Date.now(), nextSlot);
+          nextSlot = slot2 + gap;
+          if (slot2 > Date.now()) await wait(slot2 - Date.now(), signal);
+          await applyPnl(a, signal);
+        }
       } catch (error) {
         if (signal.aborted) throw error;
 
@@ -1601,7 +1708,7 @@ function exportCSV() {
   }
 
   const rows = [[
-    '榜单', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '已结算周合计', '已结算周数',
+    '榜单', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '周PNL_USD', '官网累计PNL_USD', '已结算周合计', '已结算周数',
     '累计总积分（最近查询值）', '所选周状态', '错误', '采集时间UTC', '周开始原值', '周结束原值'
   ]];
 
@@ -1610,7 +1717,7 @@ function exportCSV() {
 
     rows.push([
       MODES[mode].label, activeWeek || '', r.rank, r.a.rank ?? '', r.a.name, r.a.address,
-      ok ? r.w?.points : '', ok ? r.w?.referral_points : '',
+      ok ? r.w?.points : '', ok ? r.w?.referral_points : '', r.pnl ?? '', r.a.pnl?.total ?? '',
       r.sum, r.count, r.a.totalPoints, r.state, r.a.error, r.a.fetchedAt, r.w?.week_start, r.w?.week_end
     ]);
   }
@@ -1640,7 +1747,7 @@ function exportAllCSV() {
       items.push({
         week: w.week, rank, address: a.address,
         cells: [
-          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points,
+          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points, weekPnl(a, w.week, w) ?? '',
           STATES[key][0], w.week_start, w.week_end, w.updatedAt
         ]
       });
@@ -1658,7 +1765,7 @@ function exportAllCSV() {
   );
 
   downloadCSV('predict-all-weeks-sample.csv', [
-    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
+    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '周PNL_USD', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
     ...items.map(item => item.cells)
   ]);
 
