@@ -1100,7 +1100,7 @@ function render() {
   $('s3').textContent = ranked.toLocaleString();
 
   $('coverage').textContent =
-    `总榜已接收 ${discovery.pages} 页；` +
+    `总榜已接收 ${discovery.pages} 页（${rankedCount().toLocaleString()} 个带名次地址）；` +
     (discovery.finished ? '已到接口游标末尾，仍不代表全网历史完整覆盖' : '尚未确认采集完成') +
     `。当前榜单：${MODES[mode].label}；所选周：${activeWeek ? `第 ${activeWeek} 周` : '暂无已结算周'}；` +
     `按周期推算现在是第 ${currentWeekNumber()} 周。`;
@@ -1324,6 +1324,8 @@ async function run(work, needsPassword = false) {
 const interval = () => clamp($('interval').value, 150, 10000, 350);
 const targetCount = () => clamp($('targetCount').value, 100, 200000, 10000);
 const concurrency = () => clamp($('concurrency').value, 1, 6, 3);
+// 已从总榜采到的地址数（带名次的），手动导入的地址不算。
+const rankedCount = () => { let n = 0; for (const a of accounts.values()) if (a.rank != null) n++; return n; };
 
 // 总榜接口尚未实测，这里兼容几种常见的列表 / 游标字段名。
 function leaderboardPage(data) {
@@ -1350,8 +1352,8 @@ function leaderboardPage(data) {
 async function collect(signal) {
   const target = targetCount();
 
-  if (accounts.size >= target) {
-    message(`已缓存 ${accounts.size} 个地址，达到目标 ${target}。`);
+  if (rankedCount() >= target) {
+    message(`已缓存总榜前 ${rankedCount()} 名地址，达到目标 ${target}。`);
     return true;
   }
 
@@ -1363,8 +1365,8 @@ async function collect(signal) {
   const max = clamp($('maxPages').value, 1, 2000, 200);
 
   for (let i = 0; i < max; i++) {
-    message(`读取总榜第 ${discovery.pages + 1} 页…（已缓存 ${accounts.size} / 目标 ${target} 个地址）`);
-    progress(accounts.size, target);
+    message(`读取总榜第 ${discovery.pages + 1} 页…（已采集总榜 ${rankedCount()} / 目标 ${target} 名）`);
+    progress(rankedCount(), target);
 
     const data = await request('leaderboard', { after: discovery.cursor }, signal);
     const { list, next } = leaderboardPage(data);
@@ -1391,25 +1393,25 @@ async function collect(signal) {
     discovery.finished = !next;
     if (next) discovery.seen.push(next);
 
-    log(`接收第 ${discovery.pages} 页：${batch.length} 条；现有 ${accounts.size} 个去重地址。`);
+    log(`接收第 ${discovery.pages} 页：${batch.length} 条；已采集总榜 ${rankedCount()} 名，本机共 ${accounts.size} 个地址。`);
 
     render();
     await save();
 
     if (!next) {
-      message(`已到接口游标末尾，共缓存 ${accounts.size} 个地址。`);
+      message(`已到接口游标末尾，共采集总榜 ${rankedCount()} 名。`);
       return true;
     }
 
-    if (accounts.size >= target) {
-      message(`已缓存 ${accounts.size} 个地址，达到目标 ${target}。`);
+    if (rankedCount() >= target) {
+      message(`已采集总榜前 ${rankedCount()} 名，达到目标 ${target}。`);
       return true;
     }
 
     await wait(interval(), signal);
   }
 
-  message(`已达到本次采集页数限制（${max} 页），已缓存 ${accounts.size} 个地址；再点一次继续。`);
+  message(`已达到本次采集页数限制（${max} 页），已采集总榜 ${rankedCount()} 名；再点一次继续。`);
   return false;
 }
 
