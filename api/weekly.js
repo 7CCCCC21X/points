@@ -11,7 +11,7 @@ const CURSOR_MAX = 4096;
 const BODY_MAX = 2 * 1024 * 1024;
 const UPSTREAM_TIMEOUT = 18000;
 
-const throttle = createThrottle(8, 8);
+const throttle = createThrottle(15, 15);
 
 function upstreamError(status, action) {
   const leaderboard = action === 'leaderboard';
