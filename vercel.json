@@ -5,6 +5,9 @@
   "functions": {
     "api/weekly.js": {
       "maxDuration": 30
+    },
+    "api/pnl.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
