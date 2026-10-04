@@ -365,7 +365,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
     因此本机合计与官网各周总计只在样本覆盖完整、且全部重查过后才接近。
     *累计积分取最近一次地址查询的 leaderboard 字段，没有则使用采集总榜的值；不是该历史周末的累计值。
     推荐积分单列，不加进周积分和合计，也不乘 1.1。
-    周手续费是本次新增字段，之前缓存的地址要重新查询后才会显示。
+    周手续费是新增字段，之前缓存的地址会显示「—」，点“更新到最新周”或“一键”会自动补查这些地址。
   </p>
 </section>
 
@@ -671,7 +671,7 @@ function pointsOf(w) {
 
 // 某周手续费（decimal）；接口不再返回的周不计。
 function feeOf(w) {
-  if (!w || w.droppedAt || w.paid_fee_usdt === null) return null;
+  if (!w || w.droppedAt || w.paid_fee_usdt == null) return null;
   return decimal(w.paid_fee_usdt);
 }
 
@@ -724,7 +724,9 @@ function settledSum(a) {
 
 /* ---------- 数据模型 ---------- */
 
-function weeksOf(list) {
+// fromApi=true 表示接口响应：手续费字段缺失记为 null；
+// 恢复旧缓存时保持 undefined，表示该周是在支持手续费之前查的，可自动补查。
+function weeksOf(list, fromApi = false) {
   if (!Array.isArray(list)) {
     throw new Error('响应缺少 weeks 数组，不能当作 0 分。');
   }
@@ -745,7 +747,7 @@ function weeksOf(list) {
       points: numeric(w.points),
       referral_points: numeric(w.referral_points),
       // 该周已付手续费（USD），接口原值；旧缓存没有这个字段时为 null。
-      paid_fee_usdt: numeric(w.paid_fee_usdt),
+      paid_fee_usdt: !fromApi && w.paid_fee_usdt === undefined ? undefined : numeric(w.paid_fee_usdt),
       calculated: toBool(w.calculated),
       week_start: w.week_start ?? null,
       week_end: w.week_end ?? null,
@@ -1591,7 +1593,7 @@ function applyPoints(a, json) {
     throw new Error('响应地址与查询地址不一致。');
   }
 
-  const weeks = weeksOf(body.weeks);
+  const weeks = weeksOf(body.weeks, true);
   const now = new Date().toISOString();
 
   a.weeks = mergeWeeks(a.weeks, weeks, now);
@@ -1624,6 +1626,8 @@ function needsQuery(a, scope, settled = latestSettledWeek()) {
   if (scope === 'all' || a.status !== 'ok') return true;
   if (scope !== 'stale') return false;
   if (queryPnl() && !a.pnl) return true;
+  // 支持手续费之前查过的地址：补查一次拿到各周手续费。
+  if (a.weeks.some(w => !w.droppedAt && w.paid_fee_usdt === undefined)) return true;
 
   if (!settled) {
     const fetched = Date.parse(a.fetchedAt);
