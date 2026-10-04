@@ -296,6 +296,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
         <option value="total">累计总积分</option>
         <option value="pnl">所选周官网 PNL</option>
         <option value="pnlTotal">官网累计 PNL</option>
+        <option value="fee">所选周手续费</option>
       </select>
     </label>
 
@@ -327,7 +328,8 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
 
   <p class="muted hint">
     名次是当前样本内的排名，不是官方全网榜；同分并列。周排名只给查询成功、明确已结算且积分有效的记录；
-    合计榜按每个地址所有已结算周的周积分相加。PNL 榜可切换升序（亏损最多在前）或降序（盈利最多在前）。点击名称可查看该地址各周积分与排名，点击钱包地址跳转到 predict.fun 的 portfolio 页面。
+    合计榜按每个地址所有已结算周的周积分相加。PNL 榜可切换升序（亏损最多在前）或降序（盈利最多在前）。
+    周手续费取接口返回的该周 paid_fee_usdt 原值（不打折），未结算的本周也有值；手续费榜升序即花费最少在前。点击名称可查看该地址各周积分与排名，点击钱包地址跳转到 predict.fun 的 portfolio 页面。
   </p>
 
   <div class="tablebox">
@@ -339,6 +341,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
           <th>钱包地址</th>
           <th class="num" data-basis="week" data-label="周积分" title="点击按此列排名，再点切换升降序">周积分</th>
           <th class="num">推荐积分</th>
+          <th class="num" data-basis="fee" data-label="周手续费 (USD)" title="点击按此列排名，再点切换升降序">周手续费 (USD)</th>
           <th class="num" data-basis="pnl" data-label="周 PNL (USD)" title="点击按此列排名，再点切换升降序">周 PNL (USD)</th>
           <th class="num" data-basis="pnlTotal" data-label="累计 PNL (USD)" title="点击按此列排名，再点切换升降序">累计 PNL (USD)</th>
           <th class="num" data-basis="sum" data-label="已结算周合计" title="点击按此列排名，再点切换升降序">已结算周合计</th>
@@ -362,6 +365,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
     因此本机合计与官网各周总计只在样本覆盖完整、且全部重查过后才接近。
     *累计积分取最近一次地址查询的 leaderboard 字段，没有则使用采集总榜的值；不是该历史周末的累计值。
     推荐积分单列，不加进周积分和合计，也不乘 1.1。
+    周手续费是本次新增字段，之前缓存的地址要重新查询后才会显示。
   </p>
 </section>
 
@@ -383,6 +387,7 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
           <th>样本第一名</th>
           <th class="num">最高周积分</th>
           <th class="num">周积分合计</th>
+          <th class="num">手续费合计 (USD)</th>
           <th>最近更新（北京时间）</th>
           <th></th>
         </tr>
@@ -452,7 +457,8 @@ const MODES = {
   sum:   { label: '已结算周积分合计', head: '合计排名', file: 'settled-sum' },
   total: { label: '累计总积分', head: '总积分排名', file: 'total-points' },
   pnl:   { label: '所选周官网 PNL', head: '周 PNL 排名', file: 'week-pnl' },
-  pnlTotal: { label: '官网累计 PNL', head: '累计 PNL 排名', file: 'total-pnl' }
+  pnlTotal: { label: '官网累计 PNL', head: '累计 PNL 排名', file: 'total-pnl' },
+  fee:   { label: '所选周手续费', head: '手续费排名', file: 'week-fee' }
 };
 
 const $ = id => document.getElementById(id);
@@ -663,6 +669,25 @@ function pointsOf(w) {
   return d;
 }
 
+// 某周手续费（decimal）；接口不再返回的周不计。
+function feeOf(w) {
+  if (!w || w.droppedAt || w.paid_fee_usdt === null) return null;
+  return decimal(w.paid_fee_usdt);
+}
+
+// 该地址所有周手续费之和（含未结算周），没有任何手续费数据返回 null。
+function feeSum(a) {
+  let sum = null;
+  if (a.status !== 'ok') return sum;
+
+  for (const w of a.weeks) {
+    const d = feeOf(w);
+    if (d) sum = sum ? addDecimals(sum, d) : d;
+  }
+
+  return sum;
+}
+
 function totalOf(a) {
   const cached = totalCache.get(a);
   if (cached && cached.src === a.totalPoints) return cached.d;
@@ -719,6 +744,8 @@ function weeksOf(list) {
       week,
       points: numeric(w.points),
       referral_points: numeric(w.referral_points),
+      // 该周已付手续费（USD），接口原值；旧缓存没有这个字段时为 null。
+      paid_fee_usdt: numeric(w.paid_fee_usdt),
       calculated: toBool(w.calculated),
       week_start: w.week_start ?? null,
       week_end: w.week_end ?? null,
@@ -998,7 +1025,8 @@ function buildRows(all, week, mode, ascending = false) {
       state: STATES[key][0],
       weekScore: key === 'ok' ? pointsOf(w) : null,
       total: totalOf(a),
-      pnl: week ? weekPnl(a, week, w) : null
+      pnl: week ? weekPnl(a, week, w) : null,
+      fee: a.status === 'ok' ? feeOf(w) : null
     };
 
     r.pnlTotal = Number.isFinite(a.pnl?.total) ? a.pnl.total : null;
@@ -1008,6 +1036,7 @@ function buildRows(all, week, mode, ascending = false) {
       mode === 'sum' ? r.sum :
       mode === 'total' ? r.total :
       mode === 'pnl' ? (r.pnl == null ? null : decimal(String(r.pnl))) :
+      mode === 'fee' ? r.fee :
       (r.pnlTotal == null ? null : decimal(String(r.pnlTotal)));
 
     // 升序时取相反数排名：第 1 名 = 最小值（PNL 榜即亏得最多的）。
@@ -1054,12 +1083,17 @@ function weekSummaries() {
       if (!s) {
         s = {
           week: w.week, week_start: null, week_end: null,
-          records: 0, ranked: 0, top: null, topScore: null, sum: null, updatedAt: ''
+          records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, updatedAt: ''
         };
         byWeek.set(w.week, s);
       }
 
       s.records++;
+
+      if (a.status === 'ok') {
+        const fee = feeOf(w);
+        if (fee) s.fee = s.fee ? addDecimals(s.fee, fee) : fee;
+      }
       s.week_start ??= w.week_start;
       s.week_end ??= w.week_end;
       if (w.updatedAt && w.updatedAt > s.updatedAt) s.updatedAt = w.updatedAt;
@@ -1085,7 +1119,7 @@ function weekSummaries() {
   if (!byWeek.has(current)) {
     byWeek.set(current, {
       week: current, week_start: null, week_end: null,
-      records: 0, ranked: 0, top: null, topScore: null, sum: null, updatedAt: ''
+      records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, updatedAt: ''
     });
   }
 
@@ -1151,6 +1185,7 @@ function rowHTML(r, mode) {
         title="在 predict.fun 打开该地址的 portfolio">${escapeHTML(a.address)}</a></td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
       ${num('', ok ? format(r.w?.referral_points) : '—')}
+      ${num('fee', format(r.fee), r.fee ? decimalString(r.fee) : '')}
       <td class="num${pnlClass(r.pnl)}${mode === 'pnl' ? ' basis' : ''}" title="${escapeHTML(a.pnl?.error || '')}">${pnlText(r.pnl)}</td>
       <td class="num${pnlClass(r.pnlTotal)}${mode === 'pnlTotal' ? ' basis' : ''}">${pnlText(r.pnlTotal)}</td>
       ${num('sum', format(r.sum), r.sum ? `${decimalString(r.sum)}（已结算 ${r.count} 周）` : '')}
@@ -1175,6 +1210,7 @@ function weekRowHTML(s) {
       <td>${top}</td>
       <td class="num" title="${s.topScore ? escapeHTML(decimalString(s.topScore)) : ''}">${format(s.topScore)}</td>
       <td class="num" title="${s.sum ? escapeHTML(decimalString(s.sum)) : ''}">${format(s.sum)}</td>
+      <td class="num" title="${s.fee ? escapeHTML(decimalString(s.fee)) : ''}">${format(s.fee)}</td>
       <td>${timeText(s.updatedAt)}</td>
       <td><button class="small" data-week="${s.week}">查看周排名</button></td>
     </tr>`;
@@ -1183,7 +1219,7 @@ function weekRowHTML(s) {
 function renderWeeks() {
   $('weeksBody').innerHTML =
     weekSummaries().map(weekRowHTML).join('') ||
-    '<tr><td class="empty" colspan="8">还没有周数据。查询地址后，这里会列出每一周的样本统计。</td></tr>';
+    '<tr><td class="empty" colspan="9">还没有周数据。查询地址后，这里会列出每一周的样本统计。</td></tr>';
 }
 
 function render() {
@@ -1232,7 +1268,7 @@ function render() {
 
   $('tbody').innerHTML =
     filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(r => rowHTML(r, mode)).join('') ||
-    '<tr><td class="empty" colspan="11">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
+    '<tr><td class="empty" colspan="12">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
 
   $('pageInfo').textContent = `${page} / ${pages} 页 · 筛选后 ${filtered.length} 条 · 每页 ${PAGE_SIZE} 条`;
   $('prev').disabled = page <= 1;
@@ -1262,6 +1298,7 @@ function lookup(address = $('lookup').value.trim()) {
       <div><span>总榜名次</span> ${a.rank ?? '—'}</div>
       <div><span>累计总积分</span> ${format(a.totalPoints)}</div>
       <div><span>已结算周合计</span> ${format(sum)}${count ? `（${count} 周）` : ''}</div>
+      <div><span>各周手续费合计</span> ${format(feeSum(a))}</div>
       <div><span>官网累计 PNL</span> <b class="${pnlClass(a.pnl?.total)}">${pnlText(a.pnl?.total)}</b>${a.pnl?.error ? `（${escapeHTML(a.pnl.error)}）` : ''}</div>
       <div><span>采集时间</span> ${timeText(a.fetchedAt)}</div>
     </div>`;
@@ -1286,6 +1323,7 @@ function lookup(address = $('lookup').value.trim()) {
         <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
         <td class="num">${format(w.referral_points)}</td>
+        <td class="num" title="${escapeHTML(w.paid_fee_usdt ?? '')}">${format(w.droppedAt ? null : w.paid_fee_usdt)}</td>
         <td class="num${pnlClass(weekPnl(a, w.week, w))}">${pnlText(weekPnl(a, w.week, w))}</td>
         <td>${badge(key)}</td>
         <td class="num">${rankText}</td>
@@ -1299,7 +1337,7 @@ function lookup(address = $('lookup').value.trim()) {
         <thead>
           <tr>
             <th>周</th><th>周期（北京时间）</th><th class="num">周积分</th><th class="num">推荐积分</th>
-            <th class="num">周 PNL (USD)</th><th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
+            <th class="num">周手续费 (USD)</th><th class="num">周 PNL (USD)</th><th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
           </tr>
         </thead>
         <tbody>${rows.join('')}</tbody>
@@ -1759,12 +1797,12 @@ function exportCSV() {
 
   const mode = $('mode').value;
 
-  if ((mode === 'week' || mode === 'pnl') && !activeWeek) {
+  if ((mode === 'week' || mode === 'pnl' || mode === 'fee') && !activeWeek) {
     return message('暂无可导出的周；先查询地址或选择已有周。');
   }
 
   const rows = [[
-    '榜单', '排序', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '周PNL_USD', '官网累计PNL_USD', '已结算周合计', '已结算周数',
+    '榜单', '排序', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '周手续费_USD', '周PNL_USD', '官网累计PNL_USD', '已结算周合计', '已结算周数',
     '累计总积分（最近查询值）', '所选周状态', '错误', '采集时间UTC', '周开始原值', '周结束原值'
   ]];
 
@@ -1773,13 +1811,13 @@ function exportCSV() {
 
     rows.push([
       MODES[mode].label, $('order').value === 'asc' ? '升序' : '降序', activeWeek || '', r.rank, r.a.rank ?? '', r.a.name, r.a.address,
-      ok ? r.w?.points : '', ok ? r.w?.referral_points : '', r.pnl ?? '', r.a.pnl?.total ?? '',
+      ok ? r.w?.points : '', ok ? r.w?.referral_points : '', r.fee ? decimalString(r.fee) : '', r.pnl ?? '', r.a.pnl?.total ?? '',
       r.sum, r.count, r.a.totalPoints, r.state, r.a.error, r.a.fetchedAt, r.w?.week_start, r.w?.week_end
     ]);
   }
 
   const order = $('order').value === 'asc' ? '-asc' : '';
-  const name = mode === 'week' ? `predict-week-${activeWeek}${order}-sample.csv` : `predict-${MODES[mode].file}${activeWeek && mode === 'pnl' ? `-week-${activeWeek}` : ''}${order}-sample.csv`;
+  const name = mode === 'week' ? `predict-week-${activeWeek}${order}-sample.csv` : `predict-${MODES[mode].file}${activeWeek && (mode === 'pnl' || mode === 'fee') ? `-week-${activeWeek}` : ''}${order}-sample.csv`;
   downloadCSV(name, rows);
 
   message(`已导出「${MODES[mode].label}」榜单的全部 ${lastRows.length} 个地址，不受页面筛选和分页影响。`);
@@ -1804,7 +1842,7 @@ function exportAllCSV() {
       items.push({
         week: w.week, rank, address: a.address,
         cells: [
-          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points, weekPnl(a, w.week, w) ?? '',
+          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points, w.paid_fee_usdt ?? '', weekPnl(a, w.week, w) ?? '',
           STATES[key][0], w.week_start, w.week_end, w.updatedAt
         ]
       });
@@ -1822,7 +1860,7 @@ function exportAllCSV() {
   );
 
   downloadCSV('predict-all-weeks-sample.csv', [
-    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '周PNL_USD', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
+    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '周手续费_USD', '周PNL_USD', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
     ...items.map(item => item.cells)
   ]);
 
