@@ -12,6 +12,9 @@ import { ADDRESS_RE, reply, authorize, createThrottle } from './_shared.js';
 
 const DEFAULT_GRAPHQL_URL = 'https://graphql.predict.fun/graphql';
 const UPSTREAM_TIMEOUT = Math.max(1000, Number(process.env.PREDICT_UPSTREAM_TIMEOUT_MS || 8000));
+// 整次请求（含翻页与重试）的总预算：vercel.json 里 maxDuration 是 30 秒，超时会被平台杀掉并返回非 JSON 错误页，
+// 这里主动在预算内停下，返回已取到的部分并标记 truncated。
+const TOTAL_BUDGET = Math.max(5000, Number(process.env.PREDICT_TOTAL_BUDGET_MS || 20000));
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
 const MAX_PAGES = 25;
 
@@ -101,7 +104,11 @@ export function toChecksumAddress(address) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function predictGraphql(variables) {
+const isTimeout = e => e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+const timeoutError = () => Object.assign(new Error('官网 PNL 上游请求超时。'), { status: 504, timeout: true });
+
+// deadline：本次代理请求的总截止时刻（毫秒），单次上游超时不会越过它。
+async function predictGraphql(variables, deadline) {
   const headers = {
     Accept: 'application/graphql-response+json, application/json',
     'Content-Type': 'application/json',
@@ -116,29 +123,47 @@ async function predictGraphql(variables) {
   let upstream = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw timeoutError();
+
+    // 只在预算还够再来一次时才重试。
+    const canRetry = attempt === 0 && remaining > UPSTREAM_TIMEOUT / 2;
+
     try {
       upstream = await fetch(process.env.PREDICT_GRAPHQL_URL || DEFAULT_GRAPHQL_URL, {
         method: 'POST',
         headers,
         body: JSON.stringify({ query: QUERY, variables, operationName: 'GetAccountPnlTimeseries' }),
-        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT)
+        signal: AbortSignal.timeout(Math.min(UPSTREAM_TIMEOUT, remaining))
       });
     } catch (e) {
-      if (attempt === 0) { await sleep(500); continue; }
-      const timedOut = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
-      throw Object.assign(new Error(timedOut ? '官网 PNL 上游请求超时。' : '无法连接官网 GraphQL。'), { status: 504 });
+      if (canRetry) { await sleep(500); continue; }
+      if (isTimeout(e)) throw timeoutError();
+      throw Object.assign(new Error('无法连接官网 GraphQL。'), { status: 504 });
     }
 
-    if (RETRYABLE_STATUS.has(upstream.status) && attempt === 0) { await sleep(500); continue; }
+    if (RETRYABLE_STATUS.has(upstream.status) && canRetry) {
+      // 不读的响应体要取消，否则连接会挂到被回收为止。
+      await upstream.body?.cancel().catch(() => {});
+      await sleep(500);
+      continue;
+    }
     break;
   }
 
-  const text = await upstream.text();
+  let text;
+  try {
+    text = await upstream.text();
+  } catch (e) {
+    if (isTimeout(e)) throw timeoutError();
+    throw Object.assign(new Error('读取官网 GraphQL 响应失败。'), { status: 502 });
+  }
 
   if (upstream.status === 401 || upstream.status === 403) {
+    // 503 = 服务端配置问题（与 weekly.js 缺 API Key 一致），前端据此立即停止整批查询，而不是逐个地址重试。
     throw Object.assign(
       new Error(`官网 GraphQL 拒绝会话（HTTP ${upstream.status}）：PREDICT_GRAPHQL_AUTH / PREDICT_GRAPHQL_COOKIE 缺失或已过期，请在 Vercel 更新。`),
-      { status: 502 }
+      { status: 503 }
     );
   }
 
@@ -166,19 +191,28 @@ async function predictGraphql(variables) {
 const isIntervalEnumError = err =>
   err?.graphql && /interval|TimeseriesInterval|enum/i.test(err.message) && /invalid|does not exist|cannot represent|expected/i.test(err.message);
 
-// 跟随 hasNextPage 翻页取完整时序。
-async function fetchTimeseries(address, interval) {
+// 跟随 hasNextPage 翻页取完整时序；超出页数上限或总预算时停下并标记 truncated。
+async function fetchTimeseries(address, interval, deadline) {
   const points = [];
   let after = null;
   let pages = 0;
   let truncated = false;
 
   while (pages < MAX_PAGES) {
-    const json = await predictGraphql({
-      address,
-      filter: { interval },
-      ...(after ? { pagination: { after } } : {})
-    });
+    if (Date.now() >= deadline) { truncated = true; break; }
+
+    let json;
+    try {
+      json = await predictGraphql({
+        address,
+        filter: { interval },
+        ...(after ? { pagination: { after } } : {})
+      }, deadline);
+    } catch (err) {
+      // 已经取到一部分时，超时只截断而不整体失败。
+      if (err?.timeout && points.length) { truncated = true; break; }
+      throw err;
+    }
 
     pages++;
 
@@ -199,13 +233,13 @@ async function fetchTimeseries(address, interval) {
   return { points, truncated };
 }
 
-async function fetchWithAllFallback(address) {
+async function fetchWithAllFallback(address, deadline) {
   const candidates = [...new Set([resolvedAllInterval, ...ALL_INTERVAL_CANDIDATES])];
   let lastErr = null;
 
   for (const candidate of candidates) {
     try {
-      const result = await fetchTimeseries(address, candidate);
+      const result = await fetchTimeseries(address, candidate, deadline);
       resolvedAllInterval = candidate;
       return { ...result, interval: candidate };
     } catch (err) {
@@ -237,7 +271,10 @@ export default async function handler(req, res) {
   if (throttle.acquire()) return fail(429, '请求过快，请稍后继续。', 1);
 
   try {
-    const { points, truncated, interval } = await fetchWithAllFallback(address);
+    const { points, truncated, interval } = await fetchWithAllFallback(address, Date.now() + TOTAL_BUDGET);
+
+    // 一页都没取到就超时：是超时不是“未交易”，交给前端重试。
+    if (truncated && !points.length) throw timeoutError();
 
     if (!points.length) {
       return reply(res, 200, { success: false, address, interval, error: '官网没有该地址的 PNL 时序（可能未交易）。', empty: true });
@@ -256,7 +293,7 @@ export default async function handler(req, res) {
       points
     });
   } catch (err) {
-    const status = [429, 502, 504].includes(err?.status) ? err.status : 502;
+    const status = [429, 502, 503, 504].includes(err?.status) ? err.status : 502;
     return fail(status, err?.message || '官网 PNL 代理失败。', status === 429 ? 2 : 0);
   } finally {
     throttle.release();
