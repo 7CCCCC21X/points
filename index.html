@@ -120,6 +120,7 @@
   <div class="stat"><small>已载入地址</small><strong id="s1">0</strong></div>
   <div class="stat"><small>查询成功 / 失败</small><strong id="s2">0 / 0</strong></div>
   <div class="stat highlight"><small>当前榜单可排名地址</small><strong id="s3">0</strong></div>
+  <div class="stat"><small>所选周交易量 Σ (USD)</small><strong id="s6">0</strong></div>
   <div class="stat"><small>所选周手续费 Σ (USD)</small><strong id="s4">0</strong></div>
   <div class="stat"><small>全部手续费 Σ (USD)</small><strong id="s5">0</strong></div>
 </div>
@@ -138,6 +139,7 @@
         <option value="pnlTotal">官网累计 PNL</option>
         <option value="fee">所选周手续费</option>
         <option value="feeAll">全部手续费</option>
+        <option value="volume">所选周交易量</option>
         <option value="cpp">所选周积分成本</option>
       </select>
     </label>
@@ -177,7 +179,8 @@
     名次是当前样本内的排名，不是官方全网榜；同分并列。周排名只给查询成功、明确已结算且积分有效的记录；
     合计榜按每个地址所有已结算周的周积分相加。PNL 榜可切换升序（亏损最多在前）或降序（盈利最多在前）。
     手续费口径与 yuce 一致：周手续费 = 接口返回的该周 paid_fee_usdt × 手续费折扣（默认 0.9，填 1 为接口原值），未结算的本周也有值；
-    全部手续费 = 该地址所有周的周手续费相加；积分成本 = 周手续费 ÷ 周积分，只对已结算且积分有效的周计算，越低越好。点击名称可查看该地址各周积分与排名，点击钱包地址跳转到 predict.fun 的 portfolio 页面。
+    全部手续费 = 该地址所有周的周手续费相加；积分成本 = 周手续费 ÷ 周积分，只对已结算且积分有效的周计算，越低越好。
+    周交易量 = 接口返回的该周 paid_volume_usdt + free_volume_usdt（付费 + 免费，同 yuce 的“总交易量”），不乘折扣，鼠标悬停可见拆分。点击名称可查看该地址各周积分与排名，点击钱包地址跳转到 predict.fun 的 portfolio 页面。
   </p>
 
   <div class="tablebox">
@@ -189,6 +192,7 @@
           <th>钱包地址</th>
           <th class="num" data-basis="week" data-label="周积分" title="点击按此列排名，再点切换升降序">周积分</th>
           <th class="num">推荐积分</th>
+          <th class="num" data-basis="volume" data-label="周交易量 (USD)" title="付费 + 免费交易量；点击按此列排名，再点切换升降序">周交易量 (USD)</th>
           <th class="num" data-basis="fee" data-label="周手续费 (USD)" title="点击按此列排名，再点切换升降序">周手续费 (USD)</th>
           <th class="num" data-basis="feeAll" data-label="全部手续费 (USD)" title="点击按此列排名，再点切换升降序">全部手续费 (USD)</th>
           <th class="num" data-basis="cpp" data-label="积分成本 $/积分" title="周手续费 ÷ 周积分；点击按此列排名（低在前），再点切换升降序">积分成本 $/积分</th>
@@ -215,7 +219,7 @@
     因此本机合计与官网各周总计只在样本覆盖完整、且全部重查过后才接近。
     *累计积分取最近一次地址查询的 leaderboard 字段，没有则使用采集总榜的值；不是该历史周末的累计值。
     推荐积分单列，不加进周积分和合计，也不乘 1.1。
-    周手续费是新增字段，之前缓存的地址会显示「—」，点“更新到最新周”或“一键”会自动补查这些地址。
+    周手续费、周交易量是新增字段，之前缓存的地址会显示「—」，点“更新到最新周”或“一键”会自动补查这些地址。
   </p>
 </section>
 
@@ -237,6 +241,7 @@
           <th>样本第一名</th>
           <th class="num">最高周积分</th>
           <th class="num">周积分合计</th>
+          <th class="num">交易量合计 (USD)</th>
           <th class="num">手续费合计 (USD)</th>
           <th>最近更新（北京时间）</th>
           <th></th>

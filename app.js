@@ -40,6 +40,7 @@ const MODES = {
   pnlTotal: { label: '官网累计 PNL', head: '累计 PNL 排名', file: 'total-pnl' },
   fee:   { label: '所选周手续费', head: '手续费排名', file: 'week-fee' },
   feeAll: { label: '全部手续费', head: '全部手续费排名', file: 'all-fee' },
+  volume: { label: '所选周交易量', head: '交易量排名', file: 'week-volume' },
   cpp:   { label: '所选周积分成本', head: '积分成本排名', file: 'week-cpp', ascending: true }
 };
 
@@ -311,6 +312,25 @@ function feeOf(w, mul = feeMultiplier()) {
   return raw ? mulDecimals(raw, mul) : null;
 }
 
+const volumeDecimals = new WeakMap(); // 周记录 → 解析后的周交易量（付费 + 免费）
+
+// 某周交易量（decimal）= 接口 paid_volume_usdt + free_volume_usdt（口径同 yuce 的“总交易量”），不乘折扣；
+// 接口不再返回的周不计，两项都没有时返回 null。
+function volumeOf(w) {
+  if (!w || w.droppedAt || (w.paid_volume_usdt == null && w.free_volume_usdt == null)) return null;
+
+  let d = volumeDecimals.get(w);
+
+  if (d === undefined) {
+    const paid = decimal(w.paid_volume_usdt);
+    const free = decimal(w.free_volume_usdt);
+    d = paid && free ? addDecimals(paid, free) : (paid || free);
+    volumeDecimals.set(w, d);
+  }
+
+  return d;
+}
+
 // 该地址所有周手续费之和（含未结算周），没有任何手续费数据返回 null。
 function feeSum(a, mul = feeMultiplier()) {
   const key = `${dataVersion}|${decimalString(mul)}`;
@@ -415,6 +435,9 @@ function weeksOf(list, fromApi = false) {
       referral_points: numeric(w.referral_points),
       // 该周已付手续费（USD），接口原值；旧缓存没有这个字段时为 null。
       paid_fee_usdt: !fromApi && w.paid_fee_usdt === undefined ? undefined : numeric(w.paid_fee_usdt),
+      // 该周交易量（USD）：付费 + 免费，接口原值；旧缓存没有这两个字段时保持 undefined，可自动补查。
+      paid_volume_usdt: !fromApi && w.paid_volume_usdt === undefined ? undefined : numeric(w.paid_volume_usdt),
+      free_volume_usdt: !fromApi && w.free_volume_usdt === undefined ? undefined : numeric(w.free_volume_usdt),
       calculated: toBool(w.calculated),
       week_start: w.week_start ?? null,
       week_end: w.week_end ?? null,
@@ -861,7 +884,8 @@ function buildRows(all, week, mode, ascending = false) {
       total: totalOf(a),
       pnl: week ? weekPnl(a, week) : null,
       fee: a.status === 'ok' ? feeOf(w, mul) : null,
-      feeAll: feeSum(a, mul)
+      feeAll: feeSum(a, mul),
+      volume: a.status === 'ok' ? volumeOf(w) : null
     };
 
     // 积分成本只对可排名的周（已结算、积分有效）计算。
@@ -876,6 +900,7 @@ function buildRows(all, week, mode, ascending = false) {
       mode === 'pnl' ? (r.pnl == null ? null : decimal(String(r.pnl))) :
       mode === 'fee' ? r.fee :
       mode === 'feeAll' ? r.feeAll :
+      mode === 'volume' ? r.volume :
       mode === 'cpp' ? (Number.isFinite(r.cpp) ? decimal(String(r.cpp)) : null) :
       (r.pnlTotal == null ? null : decimal(String(r.pnlTotal)));
 
@@ -925,7 +950,7 @@ function weekSummaries() {
       if (!s) {
         s = {
           week: w.week, week_start: null, week_end: null,
-          records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, updatedAt: ''
+          records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, volume: null, updatedAt: ''
         };
         byWeek.set(w.week, s);
       }
@@ -935,6 +960,8 @@ function weekSummaries() {
       if (a.status === 'ok') {
         const fee = feeOf(w, mul);
         if (fee) s.fee = s.fee ? addDecimals(s.fee, fee) : fee;
+        const volume = volumeOf(w);
+        if (volume) s.volume = s.volume ? addDecimals(s.volume, volume) : volume;
       }
       s.week_start ??= w.week_start;
       s.week_end ??= w.week_end;
@@ -961,7 +988,7 @@ function weekSummaries() {
   if (!byWeek.has(current)) {
     byWeek.set(current, {
       week: current, week_start: null, week_end: null,
-      records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, updatedAt: ''
+      records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, volume: null, updatedAt: ''
     });
   }
 
@@ -1034,6 +1061,7 @@ function rowHTML(r, mode) {
         title="在 predict.fun 打开该地址的 portfolio">${escapeHTML(a.address)}</a></td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
       ${num('', ok ? format(r.w?.referral_points) : '—')}
+      ${num('volume', format(r.volume), r.volume ? `付费 ${r.w.paid_volume_usdt ?? '—'} + 免费 ${r.w.free_volume_usdt ?? '—'}` : '')}
       ${num('fee', format(r.fee), r.fee ? decimalString(r.fee) : '')}
       ${num('feeAll', format(r.feeAll), r.feeAll ? decimalString(r.feeAll) : '')}
       ${num('cpp', cppText(r.cpp), Number.isFinite(r.cpp) ? String(r.cpp) : '')}
@@ -1061,6 +1089,7 @@ function weekRowHTML(s) {
       <td>${top}</td>
       <td class="num" title="${s.topScore ? escapeHTML(decimalString(s.topScore)) : ''}">${format(s.topScore)}</td>
       <td class="num" title="${s.sum ? escapeHTML(decimalString(s.sum)) : ''}">${format(s.sum)}</td>
+      <td class="num" title="${s.volume ? escapeHTML(decimalString(s.volume)) : ''}">${format(s.volume)}</td>
       <td class="num" title="${s.fee ? escapeHTML(decimalString(s.fee)) : ''}">${format(s.fee)}</td>
       <td>${timeText(s.updatedAt)}</td>
       <td><button class="small" data-week="${s.week}">查看周排名</button></td>
@@ -1070,7 +1099,7 @@ function weekRowHTML(s) {
 function renderWeeks() {
   $('weeksBody').innerHTML =
     weekSummaries().map(weekRowHTML).join('') ||
-    '<tr><td class="empty" colspan="9">还没有周数据。查询地址后，这里会列出每一周的样本统计。</td></tr>';
+    '<tr><td class="empty" colspan="10">还没有周数据。查询地址后，这里会列出每一周的样本统计。</td></tr>';
 }
 
 function render() {
@@ -1102,12 +1131,15 @@ function render() {
 
   let feeWeek = null;
   let feeAll = null;
+  let volumeWeek = null;
   for (const r of rows) {
     if (r.fee) feeWeek = feeWeek ? addDecimals(feeWeek, r.fee) : r.fee;
     if (r.feeAll) feeAll = feeAll ? addDecimals(feeAll, r.feeAll) : r.feeAll;
+    if (r.volume) volumeWeek = volumeWeek ? addDecimals(volumeWeek, r.volume) : r.volume;
   }
   $('s4').textContent = feeWeek ? format(feeWeek) : '0';
   $('s5').textContent = feeAll ? format(feeAll) : '0';
+  $('s6').textContent = volumeWeek ? format(volumeWeek) : '0';
 
   $('coverage').textContent =
     `总榜已接收 ${discovery.pages} 页（${rankedCount().toLocaleString()} 个带名次地址）；` +
@@ -1136,7 +1168,7 @@ function render() {
 
   $('tbody').innerHTML =
     filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(r => rowHTML(r, mode)).join('') ||
-    '<tr><td class="empty" colspan="14">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
+    '<tr><td class="empty" colspan="15">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
 
   $('pageInfo').textContent = `${page} / ${pages} 页 · 筛选后 ${filtered.length} 条 · 每页 ${PAGE_SIZE} 条`;
   $('prev').disabled = page <= 1;
@@ -1182,6 +1214,7 @@ function lookup(address = $('lookup').value.trim()) {
   const rows = [...a.weeks].sort((x, y) => y.week - x.week).map(w => {
     const key = weekState(w);
     const fee = feeOf(w, mul);
+    const volume = volumeOf(w);
     const pnl = weekPnl(a, w.week);
     let rankText = '—';
 
@@ -1196,6 +1229,7 @@ function lookup(address = $('lookup').value.trim()) {
         <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
         <td class="num">${format(w.referral_points)}</td>
+        <td class="num" title="${volume ? `付费 ${escapeHTML(w.paid_volume_usdt ?? '—')} + 免费 ${escapeHTML(w.free_volume_usdt ?? '—')}` : ''}">${format(volume)}</td>
         <td class="num" title="接口原值 ${escapeHTML(w.paid_fee_usdt ?? '')}">${format(fee)}</td>
         <td class="num">${cppText(key === 'ok' ? costPerPoint(fee, pointsOf(w)) : null)}</td>
         <td class="num${pnlClass(pnl)}">${pnlText(pnl)}</td>
@@ -1211,7 +1245,7 @@ function lookup(address = $('lookup').value.trim()) {
         <thead>
           <tr>
             <th>周</th><th>周期（北京时间）</th><th class="num">周积分</th><th class="num">推荐积分</th>
-            <th class="num">周手续费 (USD)</th><th class="num">积分成本 $/积分</th><th class="num">周 PNL (USD)</th><th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
+            <th class="num">周交易量 (USD)</th><th class="num">周手续费 (USD)</th><th class="num">积分成本 $/积分</th><th class="num">周 PNL (USD)</th><th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
           </tr>
         </thead>
         <tbody>${rows.join('')}</tbody>
@@ -1512,8 +1546,8 @@ function needsQuery(a, scope, settled = latestSettledWeek()) {
   if (scope !== 'stale') return false;
   // PNL 没查过、上次失败（如会话过期）、或还没包含最新结算周：补查。
   if (queryPnl() && pnlStale(a, settled)) return true;
-  // 支持手续费之前查过的地址：补查一次拿到各周手续费。
-  if (a.weeks.some(w => !w.droppedAt && w.paid_fee_usdt === undefined)) return true;
+  // 支持手续费 / 交易量之前查过的地址：补查一次拿到各周的手续费与交易量。
+  if (a.weeks.some(w => !w.droppedAt && (w.paid_fee_usdt === undefined || w.paid_volume_usdt === undefined))) return true;
 
   if (!settled) {
     const fetched = Date.parse(a.fetchedAt);
@@ -1701,13 +1735,15 @@ function exportCSV() {
   render();
 
   const mode = $('mode').value;
+  // 依赖所选周的榜单。
+  const weekly = ['week', 'pnl', 'fee', 'cpp', 'volume'].includes(mode);
 
-  if ((mode === 'week' || mode === 'pnl' || mode === 'fee' || mode === 'cpp') && !activeWeek) {
+  if (weekly && !activeWeek) {
     return message('暂无可导出的周；先查询地址或选择已有周。');
   }
 
   const rows = [[
-    '榜单', '排序', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '周手续费_USD', '全部手续费_USD', '积分成本_USD每积分', '手续费折扣', '周PNL_USD', '官网累计PNL_USD', '已结算周合计', '已结算周数',
+    '榜单', '排序', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '周交易量_USD', '付费交易量_USD', '免费交易量_USD', '周手续费_USD', '全部手续费_USD', '积分成本_USD每积分', '手续费折扣', '周PNL_USD', '官网累计PNL_USD', '已结算周合计', '已结算周数',
     '累计总积分（最近查询值）', '所选周状态', '错误', '采集时间UTC', '周开始原值', '周结束原值'
   ]];
 
@@ -1716,14 +1752,16 @@ function exportCSV() {
 
     rows.push([
       MODES[mode].label, $('order').value === 'asc' ? '升序' : '降序', activeWeek || '', r.rank, r.a.rank ?? '', r.a.name, r.a.address,
-      ok ? r.w?.points : '', ok ? r.w?.referral_points : '', r.fee ? decimalString(r.fee) : '', r.feeAll ? decimalString(r.feeAll) : '',
+      ok ? r.w?.points : '', ok ? r.w?.referral_points : '',
+      r.volume ? decimalString(r.volume) : '', ok ? r.w?.paid_volume_usdt ?? '' : '', ok ? r.w?.free_volume_usdt ?? '' : '',
+      r.fee ? decimalString(r.fee) : '', r.feeAll ? decimalString(r.feeAll) : '',
       Number.isFinite(r.cpp) ? r.cpp : '', decimalString(feeMultiplier()), r.pnl ?? '', r.a.pnl?.total ?? '',
       r.sum, r.count, r.a.totalPoints, r.state, r.a.error, r.a.fetchedAt, r.w?.week_start, r.w?.week_end
     ]);
   }
 
   const order = $('order').value === 'asc' ? '-asc' : '';
-  const name = mode === 'week' ? `predict-week-${activeWeek}${order}-sample.csv` : `predict-${MODES[mode].file}${activeWeek && (mode === 'pnl' || mode === 'fee' || mode === 'cpp') ? `-week-${activeWeek}` : ''}${order}-sample.csv`;
+  const name = mode === 'week' ? `predict-week-${activeWeek}${order}-sample.csv` : `predict-${MODES[mode].file}${activeWeek && weekly ? `-week-${activeWeek}` : ''}${order}-sample.csv`;
   downloadCSV(name, rows);
 
   message(`已导出「${MODES[mode].label}」榜单的全部 ${lastRows.length} 个地址，不受页面筛选和分页影响。`);
@@ -1747,11 +1785,14 @@ function exportAllCSV() {
       }
 
       const fee = feeOf(w, mul);
+      const volume = volumeOf(w);
 
       items.push({
         week: w.week, rank, address: a.address,
         cells: [
-          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points, w.paid_fee_usdt ?? '', fee ? decimalString(fee) : '', weekPnl(a, w.week) ?? '',
+          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points,
+          volume ? decimalString(volume) : '', w.paid_volume_usdt ?? '', w.free_volume_usdt ?? '',
+          w.paid_fee_usdt ?? '', fee ? decimalString(fee) : '', weekPnl(a, w.week) ?? '',
           STATES[key][0], w.week_start, w.week_end, w.updatedAt
         ]
       });
@@ -1769,7 +1810,7 @@ function exportAllCSV() {
   );
 
   downloadCSV('predict-all-weeks-sample.csv', [
-    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '周手续费原值_USD', '周手续费_USD（已打折）', '周PNL_USD', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
+    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '周交易量_USD', '付费交易量_USD', '免费交易量_USD', '周手续费原值_USD', '周手续费_USD（已打折）', '周PNL_USD', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
     ...items.map(item => item.cells)
   ]);
 
