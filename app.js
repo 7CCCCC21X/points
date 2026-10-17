@@ -1402,26 +1402,71 @@ async function fetchProxy(url, signal) {
   );
 }
 
+// 单个代理请求的等待上限：Vercel 函数最多跑 30 秒，再留出冷启动与网络往返。
+// 之前是 25 秒，PNL 代理 20 秒预算用满时会被客户端先掐断，然后白白重试。
+const REQUEST_TIMEOUT = 40000;
+// 浏览器对同一站点通常只给 6 个并发连接，多出的请求会在浏览器里排队，排队时间也被算进超时
+// （并发 4 × 积分 / PNL / 资金三条队列 = 12 个同时在途）。这里在本机限制在途请求数，排队不计入超时。
+const MAX_INFLIGHT = 6;
+const ACTION_LABEL = { points: '积分', pnl: 'PNL', funds: '资金', leaderboard: '总榜' };
+
+let inflight = 0;
+const inflightQueue = [];
+
+function acquireSlot(signal) {
+  return new Promise((resolve, reject) => {
+    const tryAcquire = () => {
+      if (signal.aborted) { reject(abortError()); return 'skip'; }
+      if (inflight < MAX_INFLIGHT) { inflight++; resolve(); return 'ok'; }
+      return 'wait';
+    };
+
+    if (tryAcquire() === 'wait') inflightQueue.push(tryAcquire);
+  });
+}
+
+function releaseSlot() {
+  inflight--;
+
+  // 依次唤醒排队者：已停止的直接出队，第一个真正拿到名额的停下。
+  while (inflightQueue.length) {
+    const next = inflightQueue.shift();
+    const result = next();
+    if (result === 'ok') break;
+    if (result === 'wait') { inflightQueue.unshift(next); break; }
+  }
+}
+
 async function request(action, params, signal) {
   const endpoint = { pnl: '/api/pnl?', funds: '/api/portfolio?' }[action];
   const url = endpoint
     ? endpoint + new URLSearchParams(params)
     : '/api/weekly?' + new URLSearchParams({ action, ...params });
+  const who = `${ACTION_LABEL[action] || action}${params.address ? ' ' + shortAddress(params.address) : ''}`;
 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (signal.aborted) throw abortError();
 
+    await acquireSlot(signal);
+
     const ctrl = new AbortController();
     const cancel = () => ctrl.abort();
-    const timer = setTimeout(cancel, 25000);
+    const timer = setTimeout(cancel, REQUEST_TIMEOUT);
     let delay = 1500 * 2 ** attempt;
 
     signal.addEventListener('abort', cancel, { once: true });
 
     try {
       return await fetchProxy(url, ctrl.signal);
-    } catch (error) {
+    } catch (caught) {
       if (signal.aborted) throw abortError();
+
+      // 浏览器给的 AbortError / TypeError 文案是英文的（“The user aborted a request.”），换成能看懂的原因。
+      const error = caught?.name === 'AbortError'
+        ? Object.assign(new Error(`请求 ${REQUEST_TIMEOUT / 1000} 秒未返回，已超时`), { timeout: true })
+        : caught instanceof TypeError
+          ? Object.assign(new Error(`网络请求失败（${caught.message}）`), { network: true })
+          : caught;
 
       if (Number.isFinite(error.retryAfter) && error.retryAfter > 0) {
         delay = Math.max(delay, error.retryAfter * 1000);
@@ -1432,16 +1477,15 @@ async function request(action, params, signal) {
         error.message += ' 上游要求等待较久，请稍后手动继续。';
       }
 
-      const retryable =
-        error.code === 429 || error.code >= 500 ||
-        error.name === 'AbortError' || error instanceof TypeError;
+      const retryable = error.code === 429 || error.code >= 500 || error.timeout || error.network;
 
       if (error.fatal || !retryable || attempt === 2) throw error;
 
-      log(`${error.message}；${Math.ceil(delay / 1000)} 秒后重试。`);
+      log(`${who}：${error.message}；${Math.ceil(delay / 1000)} 秒后重试。`);
     } finally {
       clearTimeout(timer);
       signal.removeEventListener('abort', cancel);
+      releaseSlot();
     }
 
     await wait(delay, signal);
