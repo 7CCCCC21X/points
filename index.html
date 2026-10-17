@@ -140,6 +140,8 @@
         <option value="fee">所选周手续费</option>
         <option value="feeAll">全部手续费</option>
         <option value="volume">所选周交易量</option>
+        <option value="volumePaid">所选周付费交易量</option>
+        <option value="volumeFree">所选周免费交易量</option>
         <option value="cpp">所选周积分成本</option>
       </select>
     </label>
@@ -180,7 +182,7 @@
     合计榜按每个地址所有已结算周的周积分相加。PNL 榜可切换升序（亏损最多在前）或降序（盈利最多在前）。
     手续费口径与 yuce 一致：周手续费 = 接口返回的该周 paid_fee_usdt × 手续费折扣（默认 0.9，填 1 为接口原值），未结算的本周也有值；
     全部手续费 = 该地址所有周的周手续费相加；积分成本 = 周手续费 ÷ 周积分，只对已结算且积分有效的周计算，越低越好。
-    周交易量 = 接口返回的该周 paid_volume_usdt + free_volume_usdt（付费 + 免费，同 yuce 的“总交易量”），不乘折扣，鼠标悬停可见拆分。点击名称可查看该地址各周积分与排名，点击钱包地址跳转到 predict.fun 的 portfolio 页面。
+    周交易量 = 接口返回的该周 paid_volume_usdt + free_volume_usdt（付费 + 免费，同 yuce 的“总交易量”），不乘折扣，付费与免费分列显示。点击名称可查看该地址各周积分与排名；钱包地址只显示首尾，悬停查看完整地址，点击跳转到 predict.fun 的 portfolio 页面。
   </p>
 
   <div class="tablebox">
@@ -189,10 +191,12 @@
         <tr>
           <th id="rankHead">周排名</th>
           <th>名称</th>
-          <th>钱包地址</th>
+          <th title="只显示首尾；悬停查看完整地址，点击跳转 predict.fun 的 portfolio 页面">钱包地址</th>
           <th class="num" data-basis="week" data-label="周积分" title="点击按此列排名，再点切换升降序">周积分</th>
           <th class="num">推荐积分</th>
           <th class="num" data-basis="volume" data-label="周交易量 (USD)" title="付费 + 免费交易量；点击按此列排名，再点切换升降序">周交易量 (USD)</th>
+          <th class="num" data-basis="volumePaid" data-label="付费交易量 (USD)" title="点击按此列排名，再点切换升降序">付费交易量 (USD)</th>
+          <th class="num" data-basis="volumeFree" data-label="免费交易量 (USD)" title="点击按此列排名，再点切换升降序">免费交易量 (USD)</th>
           <th class="num" data-basis="fee" data-label="周手续费 (USD)" title="点击按此列排名，再点切换升降序">周手续费 (USD)</th>
           <th class="num" data-basis="feeAll" data-label="全部手续费 (USD)" title="点击按此列排名，再点切换升降序">全部手续费 (USD)</th>
           <th class="num" data-basis="cpp" data-label="积分成本 $/积分" title="周手续费 ÷ 周积分；点击按此列排名（低在前），再点切换升降序">积分成本 $/积分</th>
@@ -242,6 +246,8 @@
           <th class="num">最高周积分</th>
           <th class="num">周积分合计</th>
           <th class="num">交易量合计 (USD)</th>
+          <th class="num">付费交易量合计 (USD)</th>
+          <th class="num">免费交易量合计 (USD)</th>
           <th class="num">手续费合计 (USD)</th>
           <th>最近更新（北京时间）</th>
           <th></th>
