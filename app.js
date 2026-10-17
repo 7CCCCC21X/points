@@ -40,6 +40,10 @@ const MODES = {
   pnlTotal: { label: '官网累计 PNL', head: '累计 PNL 排名', file: 'total-pnl' },
   fee:   { label: '所选周手续费', head: '手续费排名', file: 'week-fee' },
   feeAll: { label: '全部手续费', head: '全部手续费排名', file: 'all-fee' },
+  volume: { label: '所选周交易量', head: '交易量排名', file: 'week-volume' },
+  volumePaid: { label: '所选周付费交易量', head: '付费交易量排名', file: 'week-paid-volume' },
+  volumeFree: { label: '所选周免费交易量', head: '免费交易量排名', file: 'week-free-volume' },
+  funds: { label: '资金总量', head: '资金总量排名', file: 'funds' },
   cpp:   { label: '所选周积分成本', head: '积分成本排名', file: 'week-cpp', ascending: true }
 };
 
@@ -311,6 +315,27 @@ function feeOf(w, mul = feeMultiplier()) {
   return raw ? mulDecimals(raw, mul) : null;
 }
 
+const volumeCache = new WeakMap(); // 周记录 → { total, paid, free }（decimal 或 null）
+
+// 某周交易量：付费（paid_volume_usdt）、免费（free_volume_usdt）及两者之和（口径同 yuce 的“总交易量”），不乘折扣；
+// 接口不再返回的周不计，两项都没有时返回 null。
+function volumeParts(w) {
+  if (!w || w.droppedAt || (w.paid_volume_usdt == null && w.free_volume_usdt == null)) return null;
+
+  let v = volumeCache.get(w);
+
+  if (v === undefined) {
+    const paid = decimal(w.paid_volume_usdt);
+    const free = decimal(w.free_volume_usdt);
+    v = { paid, free, total: paid && free ? addDecimals(paid, free) : (paid || free) };
+    volumeCache.set(w, v);
+  }
+
+  return v;
+}
+
+const volumeOf = w => volumeParts(w)?.total ?? null;
+
 // 该地址所有周手续费之和（含未结算周），没有任何手续费数据返回 null。
 function feeSum(a, mul = feeMultiplier()) {
   const key = `${dataVersion}|${decimalString(mul)}`;
@@ -415,6 +440,9 @@ function weeksOf(list, fromApi = false) {
       referral_points: numeric(w.referral_points),
       // 该周已付手续费（USD），接口原值；旧缓存没有这个字段时为 null。
       paid_fee_usdt: !fromApi && w.paid_fee_usdt === undefined ? undefined : numeric(w.paid_fee_usdt),
+      // 该周交易量（USD）：付费 + 免费，接口原值；旧缓存没有这两个字段时保持 undefined，可自动补查。
+      paid_volume_usdt: !fromApi && w.paid_volume_usdt === undefined ? undefined : numeric(w.paid_volume_usdt),
+      free_volume_usdt: !fromApi && w.free_volume_usdt === undefined ? undefined : numeric(w.free_volume_usdt),
       calculated: toBool(w.calculated),
       week_start: w.week_start ?? null,
       week_end: w.week_end ?? null,
@@ -465,7 +493,8 @@ function accountOf(raw) {
     status: 'pending',
     error: '',
     fetchedAt: '',
-    pnl: null
+    pnl: null,
+    funds: null
   };
 }
 
@@ -549,6 +578,29 @@ function pnlStale(a, settled) {
   return !a.pnl || !!a.pnl.error || a.pnl.week <= settled;
 }
 
+// 资金总量（口径同 yuce 的“净资产”）：positions = 官网持仓金额，balance = 钱包 USDT 余额，
+// total = 两者之和；都是十进制字符串，缺失为 null。是查询时刻的值，不按周。
+function fundsOf(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const positions = numeric(raw.positions);
+  const balance = numeric(raw.balance);
+  const total = positions !== null && balance !== null
+    ? decimalString(addDecimals(decimal(positions), decimal(balance)))
+    : (positions ?? balance);
+
+  return {
+    positions,
+    balance,
+    total,
+    error: typeof raw.error === 'string' ? raw.error.slice(0, 300) : '',
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : ''
+  };
+}
+
+// 资金总量没查过或上次有错（含只查到一半）时补查；每次查到该地址都会顺带刷新。
+const fundsStale = a => !a.funds || !!a.funds.error;
+
 function pnlText(value) {
   if (value == null || !Number.isFinite(value)) return '—';
   const text = Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -593,6 +645,7 @@ function accountFromRecord(raw) {
   a.error = String(raw.error || '').slice(0, 500);
   a.fetchedAt = typeof raw.fetchedAt === 'string' ? raw.fetchedAt : '';
   a.pnl = pnlOf(raw.pnl);
+  a.funds = fundsOf(raw.funds);
 
   return a;
 }
@@ -853,6 +906,7 @@ function buildRows(all, week, mode, ascending = false) {
     const w = a.weeks.find(x => x.week === week);
     const key = stateOf(a, w);
     const { sum, count } = settledSum(a);
+    const vol = a.status === 'ok' ? volumeParts(w) : null;
 
     const r = {
       a, w, key, sum, count,
@@ -861,7 +915,11 @@ function buildRows(all, week, mode, ascending = false) {
       total: totalOf(a),
       pnl: week ? weekPnl(a, week) : null,
       fee: a.status === 'ok' ? feeOf(w, mul) : null,
-      feeAll: feeSum(a, mul)
+      feeAll: feeSum(a, mul),
+      volume: vol?.total ?? null,
+      volumePaid: vol?.paid ?? null,
+      volumeFree: vol?.free ?? null,
+      funds: a.funds?.total == null ? null : decimal(a.funds.total)
     };
 
     // 积分成本只对可排名的周（已结算、积分有效）计算。
@@ -876,6 +934,10 @@ function buildRows(all, week, mode, ascending = false) {
       mode === 'pnl' ? (r.pnl == null ? null : decimal(String(r.pnl))) :
       mode === 'fee' ? r.fee :
       mode === 'feeAll' ? r.feeAll :
+      mode === 'volume' ? r.volume :
+      mode === 'volumePaid' ? r.volumePaid :
+      mode === 'volumeFree' ? r.volumeFree :
+      mode === 'funds' ? r.funds :
       mode === 'cpp' ? (Number.isFinite(r.cpp) ? decimal(String(r.cpp)) : null) :
       (r.pnlTotal == null ? null : decimal(String(r.pnlTotal)));
 
@@ -925,7 +987,7 @@ function weekSummaries() {
       if (!s) {
         s = {
           week: w.week, week_start: null, week_end: null,
-          records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, updatedAt: ''
+          records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, volume: null, volumePaid: null, volumeFree: null, updatedAt: ''
         };
         byWeek.set(w.week, s);
       }
@@ -935,6 +997,10 @@ function weekSummaries() {
       if (a.status === 'ok') {
         const fee = feeOf(w, mul);
         if (fee) s.fee = s.fee ? addDecimals(s.fee, fee) : fee;
+        const vol = volumeParts(w);
+        if (vol?.total) s.volume = s.volume ? addDecimals(s.volume, vol.total) : vol.total;
+        if (vol?.paid) s.volumePaid = s.volumePaid ? addDecimals(s.volumePaid, vol.paid) : vol.paid;
+        if (vol?.free) s.volumeFree = s.volumeFree ? addDecimals(s.volumeFree, vol.free) : vol.free;
       }
       s.week_start ??= w.week_start;
       s.week_end ??= w.week_end;
@@ -961,7 +1027,7 @@ function weekSummaries() {
   if (!byWeek.has(current)) {
     byWeek.set(current, {
       week: current, week_start: null, week_end: null,
-      records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, updatedAt: ''
+      records: 0, ranked: 0, top: null, topScore: null, sum: null, fee: null, volume: null, volumePaid: null, volumeFree: null, updatedAt: ''
     });
   }
 
@@ -1026,14 +1092,19 @@ function rowHTML(r, mode) {
   const num = (basis, text, title) =>
     `<td class="num${basis === mode ? ' basis' : ''}"${title ? ` title="${escapeHTML(title)}"` : ''}>${text}</td>`;
 
+  // 地址只显示首尾（悬停看完整地址），完整地址放在 data-address 上供点击名称查询时读取。
   return `
-    <tr>
+    <tr data-address="${escapeHTML(a.address)}">
       <td class="rank${r.rank && r.rank <= 3 ? ' top' : ''}">${r.rank || '—'}</td>
       <td class="name-link" title="点击查看该地址各周积分与排名">${escapeHTML(a.name || '—')}</td>
       <td class="addr"><a class="addr" href="${PORTFOLIO_URL}${escapeHTML(a.address)}" target="_blank" rel="noopener noreferrer"
-        title="在 predict.fun 打开该地址的 portfolio">${escapeHTML(a.address)}</a></td>
+        title="${escapeHTML(a.address)}&#10;在 predict.fun 打开该地址的 portfolio">${shortAddress(a.address)}</a></td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
       ${num('', ok ? format(r.w?.referral_points) : '—')}
+      ${num('volume', format(r.volume), r.volume ? decimalString(r.volume) : '')}
+      ${num('volumePaid', format(r.volumePaid), r.volumePaid ? decimalString(r.volumePaid) : '')}
+      ${num('volumeFree', format(r.volumeFree), r.volumeFree ? decimalString(r.volumeFree) : '')}
+      ${num('funds', format(r.funds), r.funds ? `持仓 ${a.funds.positions ?? '—'} + 余额 ${a.funds.balance ?? '—'}${a.funds.error ? `；${a.funds.error}` : ''}` : (a.funds?.error || ''))}
       ${num('fee', format(r.fee), r.fee ? decimalString(r.fee) : '')}
       ${num('feeAll', format(r.feeAll), r.feeAll ? decimalString(r.feeAll) : '')}
       ${num('cpp', cppText(r.cpp), Number.isFinite(r.cpp) ? String(r.cpp) : '')}
@@ -1061,6 +1132,9 @@ function weekRowHTML(s) {
       <td>${top}</td>
       <td class="num" title="${s.topScore ? escapeHTML(decimalString(s.topScore)) : ''}">${format(s.topScore)}</td>
       <td class="num" title="${s.sum ? escapeHTML(decimalString(s.sum)) : ''}">${format(s.sum)}</td>
+      <td class="num" title="${s.volume ? escapeHTML(decimalString(s.volume)) : ''}">${format(s.volume)}</td>
+      <td class="num" title="${s.volumePaid ? escapeHTML(decimalString(s.volumePaid)) : ''}">${format(s.volumePaid)}</td>
+      <td class="num" title="${s.volumeFree ? escapeHTML(decimalString(s.volumeFree)) : ''}">${format(s.volumeFree)}</td>
       <td class="num" title="${s.fee ? escapeHTML(decimalString(s.fee)) : ''}">${format(s.fee)}</td>
       <td>${timeText(s.updatedAt)}</td>
       <td><button class="small" data-week="${s.week}">查看周排名</button></td>
@@ -1070,7 +1144,7 @@ function weekRowHTML(s) {
 function renderWeeks() {
   $('weeksBody').innerHTML =
     weekSummaries().map(weekRowHTML).join('') ||
-    '<tr><td class="empty" colspan="9">还没有周数据。查询地址后，这里会列出每一周的样本统计。</td></tr>';
+    '<tr><td class="empty" colspan="12">还没有周数据。查询地址后，这里会列出每一周的样本统计。</td></tr>';
 }
 
 function render() {
@@ -1102,12 +1176,18 @@ function render() {
 
   let feeWeek = null;
   let feeAll = null;
+  let volumeWeek = null;
+  let fundsAll = null;
   for (const r of rows) {
     if (r.fee) feeWeek = feeWeek ? addDecimals(feeWeek, r.fee) : r.fee;
     if (r.feeAll) feeAll = feeAll ? addDecimals(feeAll, r.feeAll) : r.feeAll;
+    if (r.volume) volumeWeek = volumeWeek ? addDecimals(volumeWeek, r.volume) : r.volume;
+    if (r.funds) fundsAll = fundsAll ? addDecimals(fundsAll, r.funds) : r.funds;
   }
   $('s4').textContent = feeWeek ? format(feeWeek) : '0';
   $('s5').textContent = feeAll ? format(feeAll) : '0';
+  $('s6').textContent = volumeWeek ? format(volumeWeek) : '0';
+  $('s7').textContent = fundsAll ? format(fundsAll) : '0';
 
   $('coverage').textContent =
     `总榜已接收 ${discovery.pages} 页（${rankedCount().toLocaleString()} 个带名次地址）；` +
@@ -1136,7 +1216,7 @@ function render() {
 
   $('tbody').innerHTML =
     filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(r => rowHTML(r, mode)).join('') ||
-    '<tr><td class="empty" colspan="14">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
+    '<tr><td class="empty" colspan="18">没有符合筛选条件的记录。可取消“仅显示可排名记录”检查缺失或失败。</td></tr>';
 
   $('pageInfo').textContent = `${page} / ${pages} 页 · 筛选后 ${filtered.length} 条 · 每页 ${PAGE_SIZE} 条`;
   $('prev').disabled = page <= 1;
@@ -1168,6 +1248,7 @@ function lookup(address = $('lookup').value.trim()) {
       <div><span>已结算周合计</span> ${format(sum)}${count ? `（${count} 周）` : ''}</div>
       <div><span>全部手续费</span> ${format(feeSum(a))}</div>
       <div><span>官网累计 PNL</span> <b class="${pnlClass(a.pnl?.total)}">${pnlText(a.pnl?.total)}</b>${a.pnl?.error ? `（${escapeHTML(a.pnl.error)}）` : ''}</div>
+      <div><span>资金总量</span> ${format(a.funds?.total)}${a.funds?.total != null ? `（持仓 ${format(a.funds.positions)} + 余额 ${format(a.funds.balance)}）` : ''}${a.funds?.error ? `（${escapeHTML(a.funds.error)}）` : ''}</div>
       <div><span>采集时间</span> ${timeText(a.fetchedAt)}</div>
     </div>`;
 
@@ -1182,6 +1263,7 @@ function lookup(address = $('lookup').value.trim()) {
   const rows = [...a.weeks].sort((x, y) => y.week - x.week).map(w => {
     const key = weekState(w);
     const fee = feeOf(w, mul);
+    const vol = volumeParts(w);
     const pnl = weekPnl(a, w.week);
     let rankText = '—';
 
@@ -1196,6 +1278,9 @@ function lookup(address = $('lookup').value.trim()) {
         <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
         <td class="num">${format(w.referral_points)}</td>
+        <td class="num">${format(vol?.total)}</td>
+        <td class="num">${format(vol?.paid)}</td>
+        <td class="num">${format(vol?.free)}</td>
         <td class="num" title="接口原值 ${escapeHTML(w.paid_fee_usdt ?? '')}">${format(fee)}</td>
         <td class="num">${cppText(key === 'ok' ? costPerPoint(fee, pointsOf(w)) : null)}</td>
         <td class="num${pnlClass(pnl)}">${pnlText(pnl)}</td>
@@ -1211,7 +1296,7 @@ function lookup(address = $('lookup').value.trim()) {
         <thead>
           <tr>
             <th>周</th><th>周期（北京时间）</th><th class="num">周积分</th><th class="num">推荐积分</th>
-            <th class="num">周手续费 (USD)</th><th class="num">积分成本 $/积分</th><th class="num">周 PNL (USD)</th><th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
+            <th class="num">周交易量 (USD)</th><th class="num">付费交易量 (USD)</th><th class="num">免费交易量 (USD)</th><th class="num">周手续费 (USD)</th><th class="num">积分成本 $/积分</th><th class="num">周 PNL (USD)</th><th>结算状态</th><th class="num">样本周排名 / 可排名地址</th><th>数据更新（北京时间）</th>
           </tr>
         </thead>
         <tbody>${rows.join('')}</tbody>
@@ -1260,7 +1345,7 @@ async function fetchProxy(url, signal) {
   } catch {
     // 5xx 的非 JSON 多半是 Vercel 的函数超时 / 平台错误页，可重试；其余才是没部署。
     const platform = response.status >= 500;
-    const fn = url.startsWith('/api/pnl') ? 'api/pnl.js' : 'api/weekly.js';
+    const fn = url.startsWith('/api/pnl') ? 'api/pnl.js' : url.startsWith('/api/portfolio') ? 'api/portfolio.js' : 'api/weekly.js';
 
     throw Object.assign(
       new Error(platform
@@ -1283,7 +1368,10 @@ async function fetchProxy(url, signal) {
 }
 
 async function request(action, params, signal) {
-  const url = (action === 'pnl' ? '/api/pnl?' : '/api/weekly?') + new URLSearchParams(action === 'pnl' ? params : { action, ...params });
+  const endpoint = { pnl: '/api/pnl?', funds: '/api/portfolio?' }[action];
+  const url = endpoint
+    ? endpoint + new URLSearchParams(params)
+    : '/api/weekly?' + new URLSearchParams({ action, ...params });
 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (signal.aborted) throw abortError();
@@ -1357,6 +1445,7 @@ const interval = () => clamp($('interval').value, 100, 10000, 250);
 const targetCount = () => clamp($('targetCount').value, 100, 200000, 10000);
 const concurrency = () => clamp($('concurrency').value, 1, 10, 4);
 const queryPnl = () => $('queryPnl').checked;
+const queryFunds = () => $('queryFunds').checked;
 // 已从总榜采到的地址数（带名次的），手动导入的地址不算。
 const rankedCount = () => { let n = 0; for (const a of accounts.values()) if (a.rank != null) n++; return n; };
 
@@ -1512,8 +1601,10 @@ function needsQuery(a, scope, settled = latestSettledWeek()) {
   if (scope !== 'stale') return false;
   // PNL 没查过、上次失败（如会话过期）、或还没包含最新结算周：补查。
   if (queryPnl() && pnlStale(a, settled)) return true;
-  // 支持手续费之前查过的地址：补查一次拿到各周手续费。
-  if (a.weeks.some(w => !w.droppedAt && w.paid_fee_usdt === undefined)) return true;
+  // 资金总量没查过或上次有错：补查。
+  if (queryFunds() && fundsStale(a)) return true;
+  // 支持手续费 / 交易量之前查过的地址：补查一次拿到各周的手续费与交易量。
+  if (a.weeks.some(w => !w.droppedAt && (w.paid_fee_usdt === undefined || w.paid_volume_usdt === undefined))) return true;
 
   if (!settled) {
     const fetched = Date.parse(a.fetchedAt);
@@ -1545,7 +1636,29 @@ async function applyPnl(a, signal) {
     a.pnl = pnlOf({ cum: [], week, error: empty ? '' : error.message, updatedAt });
     if (!empty) log(`${a.address}：PNL ${error.message}`);
     // 致命错误（如会话过期）要停止整批，但这是 PNL 的问题，不该把积分查询成功的地址标成失败。
-    if (error.fatal) throw Object.assign(error, { pnl: true });
+    if (error.fatal) throw Object.assign(error, { side: true });
+  } finally {
+    markDirty(a);
+  }
+}
+
+// 资金总量：官网持仓金额 + 钱包 USDT 余额。失败不影响积分结果，只记录在 a.funds.error 里。
+async function applyFunds(a, signal) {
+  const updatedAt = new Date().toISOString();
+
+  try {
+    const data = await request('funds', { address: a.address }, signal);
+    // 只查到一半（持仓或余额其中一项失败）也先记下来，带上错误，下次“更新”会重查。
+    const error = [data.portfolioError, data.balanceError].filter(x => typeof x === 'string' && x).join(' ');
+
+    a.funds = fundsOf({ positions: data.positionsValueUsd, balance: data.balanceUsd, error, updatedAt });
+    if (error) log(`${a.address}：资金 ${error}`);
+  } catch (error) {
+    if (signal.aborted) throw error;
+
+    a.funds = fundsOf({ error: error.message, updatedAt });
+    log(`${a.address}：资金 ${error.message}`);
+    if (error.fatal) throw Object.assign(error, { side: true });
   } finally {
     markDirty(a);
   }
@@ -1578,10 +1691,9 @@ async function query(scope, signal) {
   const gap = interval();
   const startedAt = Date.now();
 
-  // 两条发车时刻表：积分接口一条，PNL 接口一条，各自保证 1 / 间隔 的速率。
-  const lanes = [0, 0];
-  const takeSlot = async (pnl = false) => {
-    const lane = pnl ? 1 : 0;
+  // 三条发车时刻表：积分、PNL、资金各一条，各自保证 1 / 间隔 的速率。
+  const lanes = [0, 0, 0];
+  const takeSlot = async (lane = 0) => {
     const now = Date.now();
     const slot = Math.max(now, lanes[lane]);
     lanes[lane] = slot + gap;
@@ -1605,22 +1717,24 @@ async function query(scope, signal) {
       await takeSlot();
 
       try {
-        // 积分与 PNL 走不同上游，各自排队、同时发出，互不拖慢。
-        const pnlTask = queryPnl() && (scope === 'all' || a.status !== 'ok' || pnlStale(a, settled))
-          ? takeSlot(true).then(() => applyPnl(a, signal))
-          : null;
+        // 积分、PNL、资金走不同上游，各自排队、同时发出，互不拖慢。
+        const side = [];
+        if (queryPnl() && (scope === 'all' || a.status !== 'ok' || pnlStale(a, settled))) side.push(takeSlot(1).then(() => applyPnl(a, signal)));
+        if (queryFunds()) side.push(takeSlot(2).then(() => applyFunds(a, signal)));
 
         try {
           applyPoints(a, await request('points', { address: a.address }, signal));
           streak = 0;
         } finally {
-          if (pnlTask) await pnlTask.catch(error => { if (signal.aborted || error.fatal) throw error; });
+          // applyPnl / applyFunds 只会因停止或致命错误而拒绝；等全部结束，不留后台任务。
+          const failed = (await Promise.allSettled(side)).find(r => r.status === 'rejected');
+          if (failed) throw failed.reason;
         }
       } catch (error) {
         if (signal.aborted) return;
 
-        // PNL 的致命错误只停止整批，不改写该地址的积分查询结果。
-        if (!error.pnl) {
+        // PNL / 资金的致命错误只停止整批，不改写该地址的积分查询结果。
+        if (!error.side) {
           a.status = 'error';
           a.error = error.message;
           touch();
@@ -1701,13 +1815,15 @@ function exportCSV() {
   render();
 
   const mode = $('mode').value;
+  // 依赖所选周的榜单。
+  const weekly = ['week', 'pnl', 'fee', 'cpp', 'volume', 'volumePaid', 'volumeFree'].includes(mode);
 
-  if ((mode === 'week' || mode === 'pnl' || mode === 'fee' || mode === 'cpp') && !activeWeek) {
+  if (weekly && !activeWeek) {
     return message('暂无可导出的周；先查询地址或选择已有周。');
   }
 
   const rows = [[
-    '榜单', '排序', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '周手续费_USD', '全部手续费_USD', '积分成本_USD每积分', '手续费折扣', '周PNL_USD', '官网累计PNL_USD', '已结算周合计', '已结算周数',
+    '榜单', '排序', '所选周', '排名', '总榜名次', '名称', '钱包地址', '周积分', '推荐积分', '周交易量_USD', '付费交易量_USD', '免费交易量_USD', '资金总量_USD', '持仓金额_USD', 'USDT余额_USD', '周手续费_USD', '全部手续费_USD', '积分成本_USD每积分', '手续费折扣', '周PNL_USD', '官网累计PNL_USD', '已结算周合计', '已结算周数',
     '累计总积分（最近查询值）', '所选周状态', '错误', '采集时间UTC', '周开始原值', '周结束原值'
   ]];
 
@@ -1716,14 +1832,17 @@ function exportCSV() {
 
     rows.push([
       MODES[mode].label, $('order').value === 'asc' ? '升序' : '降序', activeWeek || '', r.rank, r.a.rank ?? '', r.a.name, r.a.address,
-      ok ? r.w?.points : '', ok ? r.w?.referral_points : '', r.fee ? decimalString(r.fee) : '', r.feeAll ? decimalString(r.feeAll) : '',
+      ok ? r.w?.points : '', ok ? r.w?.referral_points : '',
+      r.volume ? decimalString(r.volume) : '', ok ? r.w?.paid_volume_usdt ?? '' : '', ok ? r.w?.free_volume_usdt ?? '' : '',
+      r.a.funds?.total ?? '', r.a.funds?.positions ?? '', r.a.funds?.balance ?? '',
+      r.fee ? decimalString(r.fee) : '', r.feeAll ? decimalString(r.feeAll) : '',
       Number.isFinite(r.cpp) ? r.cpp : '', decimalString(feeMultiplier()), r.pnl ?? '', r.a.pnl?.total ?? '',
       r.sum, r.count, r.a.totalPoints, r.state, r.a.error, r.a.fetchedAt, r.w?.week_start, r.w?.week_end
     ]);
   }
 
   const order = $('order').value === 'asc' ? '-asc' : '';
-  const name = mode === 'week' ? `predict-week-${activeWeek}${order}-sample.csv` : `predict-${MODES[mode].file}${activeWeek && (mode === 'pnl' || mode === 'fee' || mode === 'cpp') ? `-week-${activeWeek}` : ''}${order}-sample.csv`;
+  const name = mode === 'week' ? `predict-week-${activeWeek}${order}-sample.csv` : `predict-${MODES[mode].file}${activeWeek && weekly ? `-week-${activeWeek}` : ''}${order}-sample.csv`;
   downloadCSV(name, rows);
 
   message(`已导出「${MODES[mode].label}」榜单的全部 ${lastRows.length} 个地址，不受页面筛选和分页影响。`);
@@ -1747,11 +1866,14 @@ function exportAllCSV() {
       }
 
       const fee = feeOf(w, mul);
+      const volume = volumeOf(w);
 
       items.push({
         week: w.week, rank, address: a.address,
         cells: [
-          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points, w.paid_fee_usdt ?? '', fee ? decimalString(fee) : '', weekPnl(a, w.week) ?? '',
+          w.week, periodText(w.week, w), rank, ranked, a.name, a.address, w.points, w.referral_points,
+          volume ? decimalString(volume) : '', w.paid_volume_usdt ?? '', w.free_volume_usdt ?? '',
+          w.paid_fee_usdt ?? '', fee ? decimalString(fee) : '', weekPnl(a, w.week) ?? '',
           STATES[key][0], w.week_start, w.week_end, w.updatedAt
         ]
       });
@@ -1769,7 +1891,7 @@ function exportAllCSV() {
   );
 
   downloadCSV('predict-all-weeks-sample.csv', [
-    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '周手续费原值_USD', '周手续费_USD（已打折）', '周PNL_USD', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
+    ['周', '周期（北京时间）', '样本周排名', '该周可排名地址数', '名称', '钱包地址', '周积分', '推荐积分', '周交易量_USD', '付费交易量_USD', '免费交易量_USD', '周手续费原值_USD', '周手续费_USD（已打折）', '周PNL_USD', '状态', '周开始原值', '周结束原值', '数据更新时间UTC'],
     ...items.map(item => item.cells)
   ]);
 
@@ -1917,7 +2039,8 @@ $('next').onclick = () => { page++; render(); };
 // 点击主表中的名称 → 查看该地址各周积分与排名；地址本身是跳转 predict.fun 的链接。
 $('tbody').onclick = event => {
   const cell = event.target.closest('td.name-link');
-  if (cell) showLookup(cell.parentElement.querySelector('td.addr').textContent.trim());
+  const address = cell?.closest('tr')?.dataset.address;
+  if (address) showLookup(address);
 };
 
 // 点击表头：切换到该列的榜单；再点同一列切换升降序。
