@@ -278,14 +278,26 @@ function mulDecimals(x, y) {
   return normalize({ n: x.n * y.n, s: x.s + y.s });
 }
 
-// 千分位显示，小数最多保留 4 位；接受字符串或 decimal 对象。
+// 四舍五入到 places 位小数（0.5 向远离 0 的方向进位），不经过浮点。
+function roundDecimal(d, places = 0) {
+  if (d.s <= places) return d;
+
+  const drop = 10n ** BigInt(d.s - places);
+  const abs = d.n < 0n ? -d.n : d.n;
+  let q = abs / drop;
+  if ((abs % drop) * 2n >= drop) q += 1n;
+
+  return normalize({ n: d.n < 0n ? -q : q, s: places });
+}
+
+// 表格显示：四舍五入到整数并加千分位；完整精度在悬停提示和 CSV 里。接受字符串或 decimal 对象。
 function format(value) {
   if (value == null) return '—';
 
-  const text = typeof value === 'object' ? decimalString(value) : String(value);
-  const [int, frac] = text.split('.');
+  const d = typeof value === 'object' ? value : decimal(value);
+  if (!d) return String(value);
 
-  return int.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (frac ? '.' + frac.slice(0, 4) : '');
+  return decimalString(roundDecimal(d, 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 function pointsOf(w) {
@@ -601,13 +613,21 @@ function fundsOf(raw) {
 // 资金总量没查过或上次有错（含只查到一半）时补查；每次查到该地址都会顺带刷新。
 const fundsStale = a => !a.funds || !!a.funds.error;
 
+// PNL 显示：四舍五入到整数，带正负号；取整后为 0 的不带符号、不着色。
 function pnlText(value) {
   if (value == null || !Number.isFinite(value)) return '—';
-  const text = Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return value > 0 ? `+${text}` : value < 0 ? `-${text}` : text;
+  const rounded = Math.round(Math.abs(value));
+  const text = rounded.toLocaleString('en-US');
+  return rounded === 0 ? '0' : value > 0 ? `+${text}` : `-${text}`;
 }
 
-const pnlClass = value => (value > 0 ? ' pnl-pos' : value < 0 ? ' pnl-neg' : '');
+// 悬停提示里的精确值（保留两位小数）。
+const pnlExact = value => (value == null || !Number.isFinite(value) ? '' : value.toFixed(2));
+
+const pnlClass = value => {
+  const rounded = Math.round(value);
+  return rounded > 0 ? ' pnl-pos' : rounded < 0 ? ' pnl-neg' : '';
+};
 
 function merge(a) {
   const key = a.address.toLowerCase();
@@ -1114,7 +1134,7 @@ function rowHTML(r, mode) {
       <td class="addr"><a class="addr" href="${PORTFOLIO_URL}${escapeHTML(a.address)}" target="_blank" rel="noopener noreferrer"
         title="${escapeHTML(a.address)}&#10;在 predict.fun 打开该地址的 portfolio">${shortAddress(a.address)}</a></td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
-      ${num('', ok ? format(r.w?.referral_points) : '—')}
+      ${num('', ok ? format(r.w?.referral_points) : '—', ok ? r.w?.referral_points : '')}
       ${num('volume', format(r.volume), r.volume ? decimalString(r.volume) : missingNote(ok, r.w, 'paid_volume_usdt', '交易量'), !r.volume)}
       ${num('volumePaid', format(r.volumePaid), r.volumePaid ? decimalString(r.volumePaid) : missingNote(ok, r.w, 'paid_volume_usdt', '付费交易量'), !r.volumePaid)}
       ${num('volumeFree', format(r.volumeFree), r.volumeFree ? decimalString(r.volumeFree) : missingNote(ok, r.w, 'free_volume_usdt', '免费交易量'), !r.volumeFree)}
@@ -1122,8 +1142,8 @@ function rowHTML(r, mode) {
       ${num('fee', format(r.fee), r.fee ? decimalString(r.fee) : '')}
       ${num('feeAll', format(r.feeAll), r.feeAll ? decimalString(r.feeAll) : '')}
       ${num('cpp', cppText(r.cpp), Number.isFinite(r.cpp) ? String(r.cpp) : '')}
-      <td class="num${pnlClass(r.pnl)}${mode === 'pnl' ? ' basis' : ''}" title="${escapeHTML(a.pnl?.error || '')}">${pnlText(r.pnl)}</td>
-      <td class="num${pnlClass(r.pnlTotal)}${mode === 'pnlTotal' ? ' basis' : ''}">${pnlText(r.pnlTotal)}</td>
+      <td class="num${pnlClass(r.pnl)}${mode === 'pnl' ? ' basis' : ''}" title="${escapeHTML([pnlExact(r.pnl), a.pnl?.error || ''].filter(Boolean).join('；'))}">${pnlText(r.pnl)}</td>
+      <td class="num${pnlClass(r.pnlTotal)}${mode === 'pnlTotal' ? ' basis' : ''}" title="${escapeHTML(pnlExact(r.pnlTotal))}">${pnlText(r.pnlTotal)}</td>
       ${num('sum', format(r.sum), r.sum ? `${decimalString(r.sum)}（已结算 ${r.count} 周）` : '')}
       ${num('total', format(a.totalPoints), a.totalPoints)}
       <td title="${escapeHTML(a.error)}">${badge(r.key)}</td>
@@ -1198,10 +1218,11 @@ function render() {
     if (r.volume) volumeWeek = volumeWeek ? addDecimals(volumeWeek, r.volume) : r.volume;
     if (r.funds) fundsAll = fundsAll ? addDecimals(fundsAll, r.funds) : r.funds;
   }
-  $('s4').textContent = feeWeek ? format(feeWeek) : '0';
-  $('s5').textContent = feeAll ? format(feeAll) : '0';
-  $('s6').textContent = volumeWeek ? format(volumeWeek) : '0';
-  $('s7').textContent = fundsAll ? format(fundsAll) : '0';
+  // 卡片显示取整值，悬停看完整精度。
+  for (const [id, sum] of [['s4', feeWeek], ['s5', feeAll], ['s6', volumeWeek], ['s7', fundsAll]]) {
+    $(id).textContent = sum ? format(sum) : '0';
+    $(id).title = sum ? decimalString(sum) : '';
+  }
 
   $('coverage').textContent =
     `总榜已接收 ${discovery.pages} 页（${rankedCount().toLocaleString()} 个带名次地址）；` +
@@ -1261,7 +1282,7 @@ function lookup(address = $('lookup').value.trim()) {
       <div><span>累计总积分</span> ${format(a.totalPoints)}</div>
       <div><span>已结算周合计</span> ${format(sum)}${count ? `（${count} 周）` : ''}</div>
       <div><span>全部手续费</span> ${format(feeSum(a))}</div>
-      <div><span>官网累计 PNL</span> <b class="${pnlClass(a.pnl?.total)}">${pnlText(a.pnl?.total)}</b>${a.pnl?.error ? `（${escapeHTML(a.pnl.error)}）` : ''}</div>
+      <div><span>官网累计 PNL</span> <b class="${pnlClass(a.pnl?.total)}" title="${escapeHTML(pnlExact(a.pnl?.total))}">${pnlText(a.pnl?.total)}</b>${a.pnl?.error ? `（${escapeHTML(a.pnl.error)}）` : ''}</div>
       <div><span>资金总量</span> ${format(a.funds?.total)}${a.funds?.total != null ? `（持仓 ${format(a.funds.positions)} + 余额 ${format(a.funds.balance)}）` : ''}${a.funds?.error ? `（${escapeHTML(a.funds.error)}）` : ''}</div>
       <div><span>采集时间</span> ${timeText(a.fetchedAt)}</div>
     </div>`;
@@ -1291,13 +1312,13 @@ function lookup(address = $('lookup').value.trim()) {
         <td>第 ${w.week} 周${w.week === current ? '（本周）' : ''}</td>
         <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
-        <td class="num">${format(w.referral_points)}</td>
-        <td class="num">${format(vol?.total)}</td>
-        <td class="num">${format(vol?.paid)}</td>
-        <td class="num">${format(vol?.free)}</td>
-        <td class="num" title="接口原值 ${escapeHTML(w.paid_fee_usdt ?? '')}">${format(fee)}</td>
+        <td class="num" title="${escapeHTML(w.referral_points ?? '')}">${format(w.referral_points)}</td>
+        <td class="num" title="${vol?.total ? escapeHTML(decimalString(vol.total)) : ''}">${format(vol?.total)}</td>
+        <td class="num" title="${vol?.paid ? escapeHTML(decimalString(vol.paid)) : ''}">${format(vol?.paid)}</td>
+        <td class="num" title="${vol?.free ? escapeHTML(decimalString(vol.free)) : ''}">${format(vol?.free)}</td>
+        <td class="num" title="${fee ? escapeHTML(decimalString(fee)) : ''}（接口原值 ${escapeHTML(w.paid_fee_usdt ?? '')}）">${format(fee)}</td>
         <td class="num">${cppText(key === 'ok' ? costPerPoint(fee, pointsOf(w)) : null)}</td>
-        <td class="num${pnlClass(pnl)}">${pnlText(pnl)}</td>
+        <td class="num${pnlClass(pnl)}" title="${escapeHTML(pnlExact(pnl))}">${pnlText(pnl)}</td>
         <td>${badge(key)}</td>
         <td class="num">${rankText}</td>
         <td>${timeText(w.updatedAt)}</td>
