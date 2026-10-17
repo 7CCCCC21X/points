@@ -46,6 +46,8 @@ const MODES = {
 // 手续费折扣（decimal）；空或非法时与 yuce 一样回退到 0.9。
 const FEE_MUL_KEY = 'predict-weekly-vercel.feeMul';
 const FEE_MUL_DEFAULT = '0.9';
+// 访问密码记在本浏览器里，打开页面自动填上；清空输入框即忘记。
+const PASSWORD_KEY = 'predict-weekly-vercel.password';
 
 function feeMultiplier() {
   const raw = ($('feeMul').value || '').trim();
@@ -1824,6 +1826,20 @@ $('csvAll').onclick = exportAllCSV;
 
 $('password').onkeydown = event => {
   if (event.key === 'Enter') $('query').click();
+};
+
+// 打开页面自动填上上次的密码；每次改动都保存，清空则忘记。
+try {
+  const saved = localStorage.getItem(PASSWORD_KEY);
+  if (saved) $('password').value = saved;
+} catch {}
+
+$('password').oninput = () => {
+  try {
+    const value = $('password').value;
+    if (value) localStorage.setItem(PASSWORD_KEY, value);
+    else localStorage.removeItem(PASSWORD_KEY);
+  } catch {}
 };
 
 $('add').onclick = () => run(async () => {
