@@ -85,6 +85,11 @@
       同时查询官网 PNL（按周切分）
     </label>
 
+    <label class="check">
+      <input id="queryFunds" type="checkbox" checked data-lock>
+      同时查询资金总量（持仓 + USDT 余额）
+    </label>
+
     <label class="field">
       <span>并发数</span>
       <input id="concurrency" type="number" min="1" max="10" value="4" data-lock>
@@ -110,8 +115,9 @@
   <p class="muted hint">
     接口一次返回地址的全部周，每次查询都按周合并保存：已结算的历史周永久留在本机缓存，随时可看。
     勾选“同时查询官网 PNL”时每个地址多一次请求，取官网 Portfolio 的累计 PNL 时序，按周期锚点在各周起止时刻取累计值相减得到周 PNL；本机只保存各周界的累计值（需在 Vercel 配置 PREDICT_GRAPHQL_AUTH / COOKIE）。
+    勾选“同时查询资金总量”时每个地址再多一次请求：取官网 Portfolio 的持仓金额，并读取钱包在 BNB 链上的 USDT 余额，两者相加为资金总量（持仓部分同样需要 PREDICT_GRAPHQL_AUTH / COOKIE）。
     勾选“只查总榜前 N 名”时，三个查询按钮和一键流程都只处理总榜名次 ≤ 采集目标数的地址，
-    手动导入、没有名次的地址不会被查。“更新到最新周”只查未成功的地址、还没包含最新结算周的地址，以及 PNL 还没覆盖最新结算周的地址，其余跳过。
+    手动导入、没有名次的地址不会被查。“更新到最新周”只查未成功的地址、还没包含最新结算周的地址，以及 PNL 还没覆盖最新结算周、资金总量没查到的地址，其余跳过。
     整体速率 = 1 / 请求间隔，并发只影响同时在途的请求数；上游限流时会自动退避。
   </p>
 </section>
@@ -121,6 +127,7 @@
   <div class="stat"><small>查询成功 / 失败</small><strong id="s2">0 / 0</strong></div>
   <div class="stat highlight"><small>当前榜单可排名地址</small><strong id="s3">0</strong></div>
   <div class="stat"><small>所选周交易量 Σ (USD)</small><strong id="s6">0</strong></div>
+  <div class="stat"><small>资金总量 Σ (USD)</small><strong id="s7">0</strong></div>
   <div class="stat"><small>所选周手续费 Σ (USD)</small><strong id="s4">0</strong></div>
   <div class="stat"><small>全部手续费 Σ (USD)</small><strong id="s5">0</strong></div>
 </div>
@@ -142,6 +149,7 @@
         <option value="volume">所选周交易量</option>
         <option value="volumePaid">所选周付费交易量</option>
         <option value="volumeFree">所选周免费交易量</option>
+        <option value="funds">资金总量</option>
         <option value="cpp">所选周积分成本</option>
       </select>
     </label>
@@ -182,7 +190,8 @@
     合计榜按每个地址所有已结算周的周积分相加。PNL 榜可切换升序（亏损最多在前）或降序（盈利最多在前）。
     手续费口径与 yuce 一致：周手续费 = 接口返回的该周 paid_fee_usdt × 手续费折扣（默认 0.9，填 1 为接口原值），未结算的本周也有值；
     全部手续费 = 该地址所有周的周手续费相加；积分成本 = 周手续费 ÷ 周积分，只对已结算且积分有效的周计算，越低越好。
-    周交易量 = 接口返回的该周 paid_volume_usdt + free_volume_usdt（付费 + 免费，同 yuce 的“总交易量”），不乘折扣，付费与免费分列显示。点击名称可查看该地址各周积分与排名；钱包地址只显示首尾，悬停查看完整地址，点击跳转到 predict.fun 的 portfolio 页面。
+    周交易量 = 接口返回的该周 paid_volume_usdt + free_volume_usdt（付费 + 免费，同 yuce 的“总交易量”），不乘折扣，付费与免费分列显示。
+    资金总量 = 官网持仓金额 + 钱包 USDT 余额（同 yuce 的“净资产”），是查询时刻的值，不按周；悬停可见拆分。点击名称可查看该地址各周积分与排名；钱包地址只显示首尾，悬停查看完整地址，点击跳转到 predict.fun 的 portfolio 页面。
   </p>
 
   <div class="tablebox">
@@ -197,6 +206,7 @@
           <th class="num" data-basis="volume" data-label="周交易量 (USD)" title="付费 + 免费交易量；点击按此列排名，再点切换升降序">周交易量 (USD)</th>
           <th class="num" data-basis="volumePaid" data-label="付费交易量 (USD)" title="点击按此列排名，再点切换升降序">付费交易量 (USD)</th>
           <th class="num" data-basis="volumeFree" data-label="免费交易量 (USD)" title="点击按此列排名，再点切换升降序">免费交易量 (USD)</th>
+          <th class="num" data-basis="funds" data-label="资金总量 (USD)" title="官网持仓金额 + 钱包 USDT 余额，查询时刻的值；点击按此列排名，再点切换升降序">资金总量 (USD)</th>
           <th class="num" data-basis="fee" data-label="周手续费 (USD)" title="点击按此列排名，再点切换升降序">周手续费 (USD)</th>
           <th class="num" data-basis="feeAll" data-label="全部手续费 (USD)" title="点击按此列排名，再点切换升降序">全部手续费 (USD)</th>
           <th class="num" data-basis="cpp" data-label="积分成本 $/积分" title="周手续费 ÷ 周积分；点击按此列排名（低在前），再点切换升降序">积分成本 $/积分</th>

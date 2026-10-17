@@ -8,6 +8,9 @@
     },
     "api/pnl.js": {
       "maxDuration": 30
+    },
+    "api/portfolio.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
