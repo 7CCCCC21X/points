@@ -278,14 +278,26 @@ function mulDecimals(x, y) {
   return normalize({ n: x.n * y.n, s: x.s + y.s });
 }
 
-// 千分位显示，小数最多保留 4 位；接受字符串或 decimal 对象。
+// 四舍五入到 places 位小数（0.5 向远离 0 的方向进位），不经过浮点。
+function roundDecimal(d, places = 0) {
+  if (d.s <= places) return d;
+
+  const drop = 10n ** BigInt(d.s - places);
+  const abs = d.n < 0n ? -d.n : d.n;
+  let q = abs / drop;
+  if ((abs % drop) * 2n >= drop) q += 1n;
+
+  return normalize({ n: d.n < 0n ? -q : q, s: places });
+}
+
+// 表格显示：四舍五入到整数并加千分位；完整精度在悬停提示和 CSV 里。接受字符串或 decimal 对象。
 function format(value) {
   if (value == null) return '—';
 
-  const text = typeof value === 'object' ? decimalString(value) : String(value);
-  const [int, frac] = text.split('.');
+  const d = typeof value === 'object' ? value : decimal(value);
+  if (!d) return String(value);
 
-  return int.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (frac ? '.' + frac.slice(0, 4) : '');
+  return decimalString(roundDecimal(d, 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 function pointsOf(w) {
@@ -601,13 +613,21 @@ function fundsOf(raw) {
 // 资金总量没查过或上次有错（含只查到一半）时补查；每次查到该地址都会顺带刷新。
 const fundsStale = a => !a.funds || !!a.funds.error;
 
+// PNL 显示：四舍五入到整数，带正负号；取整后为 0 的不带符号、不着色。
 function pnlText(value) {
   if (value == null || !Number.isFinite(value)) return '—';
-  const text = Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return value > 0 ? `+${text}` : value < 0 ? `-${text}` : text;
+  const rounded = Math.round(Math.abs(value));
+  const text = rounded.toLocaleString('en-US');
+  return rounded === 0 ? '0' : value > 0 ? `+${text}` : `-${text}`;
 }
 
-const pnlClass = value => (value > 0 ? ' pnl-pos' : value < 0 ? ' pnl-neg' : '');
+// 悬停提示里的精确值（保留两位小数）。
+const pnlExact = value => (value == null || !Number.isFinite(value) ? '' : value.toFixed(2));
+
+const pnlClass = value => {
+  const rounded = Math.round(value);
+  return rounded > 0 ? ' pnl-pos' : rounded < 0 ? ' pnl-neg' : '';
+};
 
 function merge(a) {
   const key = a.address.toLowerCase();
@@ -1085,12 +1105,26 @@ function badge(key) {
   return `<span class="badge badge-${STATES[key][1]}">${STATES[key][0]}</span>`;
 }
 
+// 单元格显示“—”时的原因，放进悬停提示：旧缓存没有该字段（可补查）、接口没返回、还是接口已不返回这一周。
+function missingNote(ok, w, field, label) {
+  if (!ok || !w) return '';
+  if (w.droppedAt) return '接口已不返回这一周';
+  if (w[field] === undefined) return `旧缓存没有${label}字段，点“查询 / 继续未完成地址”补查`;
+  return `接口未返回${label}`;
+}
+
+function fundsNote(a) {
+  if (!a.funds) return a.status === 'ok' ? '尚未查询资金总量：勾选“同时查询资金总量”后点“查询 / 继续未完成地址”' : '';
+  return a.funds.error || '接口未返回持仓与余额';
+}
+
 function rowHTML(r, mode) {
   const a = r.a;
   const ok = a.status === 'ok';
 
-  const num = (basis, text, title) =>
-    `<td class="num${basis === mode ? ' basis' : ''}"${title ? ` title="${escapeHTML(title)}"` : ''}>${text}</td>`;
+  // why=true 表示这一格是“—”且 title 里有原因，用虚线提示可悬停。
+  const num = (basis, text, title, why = false) =>
+    `<td class="num${basis === mode ? ' basis' : ''}${why && title ? ' why' : ''}"${title ? ` title="${escapeHTML(title)}"` : ''}>${text}</td>`;
 
   // 地址只显示首尾（悬停看完整地址），完整地址放在 data-address 上供点击名称查询时读取。
   return `
@@ -1100,16 +1134,16 @@ function rowHTML(r, mode) {
       <td class="addr"><a class="addr" href="${PORTFOLIO_URL}${escapeHTML(a.address)}" target="_blank" rel="noopener noreferrer"
         title="${escapeHTML(a.address)}&#10;在 predict.fun 打开该地址的 portfolio">${shortAddress(a.address)}</a></td>
       ${num('week', ok ? format(r.w?.points) : '—', ok ? r.w?.points : '')}
-      ${num('', ok ? format(r.w?.referral_points) : '—')}
-      ${num('volume', format(r.volume), r.volume ? decimalString(r.volume) : '')}
-      ${num('volumePaid', format(r.volumePaid), r.volumePaid ? decimalString(r.volumePaid) : '')}
-      ${num('volumeFree', format(r.volumeFree), r.volumeFree ? decimalString(r.volumeFree) : '')}
-      ${num('funds', format(r.funds), r.funds ? `持仓 ${a.funds.positions ?? '—'} + 余额 ${a.funds.balance ?? '—'}${a.funds.error ? `；${a.funds.error}` : ''}` : (a.funds?.error || ''))}
+      ${num('', ok ? format(r.w?.referral_points) : '—', ok ? r.w?.referral_points : '')}
+      ${num('volume', format(r.volume), r.volume ? decimalString(r.volume) : missingNote(ok, r.w, 'paid_volume_usdt', '交易量'), !r.volume)}
+      ${num('volumePaid', format(r.volumePaid), r.volumePaid ? decimalString(r.volumePaid) : missingNote(ok, r.w, 'paid_volume_usdt', '付费交易量'), !r.volumePaid)}
+      ${num('volumeFree', format(r.volumeFree), r.volumeFree ? decimalString(r.volumeFree) : missingNote(ok, r.w, 'free_volume_usdt', '免费交易量'), !r.volumeFree)}
+      ${num('funds', format(r.funds), r.funds ? `持仓 ${a.funds.positions ?? '—'} + 余额 ${a.funds.balance ?? '—'}${a.funds.error ? `；${a.funds.error}` : ''}` : fundsNote(a), !r.funds)}
       ${num('fee', format(r.fee), r.fee ? decimalString(r.fee) : '')}
       ${num('feeAll', format(r.feeAll), r.feeAll ? decimalString(r.feeAll) : '')}
       ${num('cpp', cppText(r.cpp), Number.isFinite(r.cpp) ? String(r.cpp) : '')}
-      <td class="num${pnlClass(r.pnl)}${mode === 'pnl' ? ' basis' : ''}" title="${escapeHTML(a.pnl?.error || '')}">${pnlText(r.pnl)}</td>
-      <td class="num${pnlClass(r.pnlTotal)}${mode === 'pnlTotal' ? ' basis' : ''}">${pnlText(r.pnlTotal)}</td>
+      <td class="num${pnlClass(r.pnl)}${mode === 'pnl' ? ' basis' : ''}" title="${escapeHTML([pnlExact(r.pnl), a.pnl?.error || ''].filter(Boolean).join('；'))}">${pnlText(r.pnl)}</td>
+      <td class="num${pnlClass(r.pnlTotal)}${mode === 'pnlTotal' ? ' basis' : ''}" title="${escapeHTML(pnlExact(r.pnlTotal))}">${pnlText(r.pnlTotal)}</td>
       ${num('sum', format(r.sum), r.sum ? `${decimalString(r.sum)}（已结算 ${r.count} 周）` : '')}
       ${num('total', format(a.totalPoints), a.totalPoints)}
       <td title="${escapeHTML(a.error)}">${badge(r.key)}</td>
@@ -1184,10 +1218,11 @@ function render() {
     if (r.volume) volumeWeek = volumeWeek ? addDecimals(volumeWeek, r.volume) : r.volume;
     if (r.funds) fundsAll = fundsAll ? addDecimals(fundsAll, r.funds) : r.funds;
   }
-  $('s4').textContent = feeWeek ? format(feeWeek) : '0';
-  $('s5').textContent = feeAll ? format(feeAll) : '0';
-  $('s6').textContent = volumeWeek ? format(volumeWeek) : '0';
-  $('s7').textContent = fundsAll ? format(fundsAll) : '0';
+  // 卡片显示取整值，悬停看完整精度。
+  for (const [id, sum] of [['s4', feeWeek], ['s5', feeAll], ['s6', volumeWeek], ['s7', fundsAll]]) {
+    $(id).textContent = sum ? format(sum) : '0';
+    $(id).title = sum ? decimalString(sum) : '';
+  }
 
   $('coverage').textContent =
     `总榜已接收 ${discovery.pages} 页（${rankedCount().toLocaleString()} 个带名次地址）；` +
@@ -1247,7 +1282,7 @@ function lookup(address = $('lookup').value.trim()) {
       <div><span>累计总积分</span> ${format(a.totalPoints)}</div>
       <div><span>已结算周合计</span> ${format(sum)}${count ? `（${count} 周）` : ''}</div>
       <div><span>全部手续费</span> ${format(feeSum(a))}</div>
-      <div><span>官网累计 PNL</span> <b class="${pnlClass(a.pnl?.total)}">${pnlText(a.pnl?.total)}</b>${a.pnl?.error ? `（${escapeHTML(a.pnl.error)}）` : ''}</div>
+      <div><span>官网累计 PNL</span> <b class="${pnlClass(a.pnl?.total)}" title="${escapeHTML(pnlExact(a.pnl?.total))}">${pnlText(a.pnl?.total)}</b>${a.pnl?.error ? `（${escapeHTML(a.pnl.error)}）` : ''}</div>
       <div><span>资金总量</span> ${format(a.funds?.total)}${a.funds?.total != null ? `（持仓 ${format(a.funds.positions)} + 余额 ${format(a.funds.balance)}）` : ''}${a.funds?.error ? `（${escapeHTML(a.funds.error)}）` : ''}</div>
       <div><span>采集时间</span> ${timeText(a.fetchedAt)}</div>
     </div>`;
@@ -1277,13 +1312,13 @@ function lookup(address = $('lookup').value.trim()) {
         <td>第 ${w.week} 周${w.week === current ? '（本周）' : ''}</td>
         <td>${escapeHTML(periodText(w.week, w))}</td>
         <td class="num" title="${escapeHTML(w.points ?? '')}">${format(w.points)}</td>
-        <td class="num">${format(w.referral_points)}</td>
-        <td class="num">${format(vol?.total)}</td>
-        <td class="num">${format(vol?.paid)}</td>
-        <td class="num">${format(vol?.free)}</td>
-        <td class="num" title="接口原值 ${escapeHTML(w.paid_fee_usdt ?? '')}">${format(fee)}</td>
+        <td class="num" title="${escapeHTML(w.referral_points ?? '')}">${format(w.referral_points)}</td>
+        <td class="num" title="${vol?.total ? escapeHTML(decimalString(vol.total)) : ''}">${format(vol?.total)}</td>
+        <td class="num" title="${vol?.paid ? escapeHTML(decimalString(vol.paid)) : ''}">${format(vol?.paid)}</td>
+        <td class="num" title="${vol?.free ? escapeHTML(decimalString(vol.free)) : ''}">${format(vol?.free)}</td>
+        <td class="num" title="${fee ? escapeHTML(decimalString(fee)) : ''}（接口原值 ${escapeHTML(w.paid_fee_usdt ?? '')}）">${format(fee)}</td>
         <td class="num">${cppText(key === 'ok' ? costPerPoint(fee, pointsOf(w)) : null)}</td>
-        <td class="num${pnlClass(pnl)}">${pnlText(pnl)}</td>
+        <td class="num${pnlClass(pnl)}" title="${escapeHTML(pnlExact(pnl))}">${pnlText(pnl)}</td>
         <td>${badge(key)}</td>
         <td class="num">${rankText}</td>
         <td>${timeText(w.updatedAt)}</td>
@@ -1596,15 +1631,20 @@ function latestSettledWeek() {
 // 查询范围：pending = 未成功的地址；
 // stale = 未成功 + 还没有最新结算周记录的地址（周结算后才查过的地址会带上该周，其余需要补查）；
 // all = 全部。
+// 旧缓存缺少后来新增的字段（手续费、交易量）：需要补查一次。
+const missingFields = a => a.weeks.some(w => !w.droppedAt && (w.paid_fee_usdt === undefined || w.paid_volume_usdt === undefined));
+
 function needsQuery(a, scope, settled = latestSettledWeek()) {
   if (scope === 'all' || a.status !== 'ok') return true;
+  // 缺新字段、或勾选了 PNL / 资金却从没查过：“查询 / 继续未完成地址”和“更新”都补查。
+  if (missingFields(a)) return true;
+  if (queryPnl() && !a.pnl) return true;
+  if (queryFunds() && !a.funds) return true;
   if (scope !== 'stale') return false;
-  // PNL 没查过、上次失败（如会话过期）、或还没包含最新结算周：补查。
+  // PNL 上次失败（如会话过期）、或还没包含最新结算周：补查。
   if (queryPnl() && pnlStale(a, settled)) return true;
-  // 资金总量没查过或上次有错：补查。
+  // 资金总量上次有错：补查。
   if (queryFunds() && fundsStale(a)) return true;
-  // 支持手续费 / 交易量之前查过的地址：补查一次拿到各周的手续费与交易量。
-  if (a.weeks.some(w => !w.droppedAt && (w.paid_fee_usdt === undefined || w.paid_volume_usdt === undefined))) return true;
 
   if (!settled) {
     const fetched = Date.parse(a.fetchedAt);
@@ -1677,11 +1717,15 @@ async function query(scope, signal) {
   const settled = latestSettledWeek();
   const list = ranked.filter(a => needsQuery(a, scope, settled)).sort((x, y) => (x.rank ?? 1e9) - (y.rank ?? 1e9));
 
+  // 被“只查总榜前 N 名”排除的地址不会被补查，新字段会一直是“—”：明确提示出来。
+  const skipped = topOnly ? accounts.size - ranked.length : 0;
+  const scopeNote = skipped ? `另有 ${skipped} 个地址不在“总榜前 ${target} 名”范围内未处理，取消该勾选可查询它们。` : '';
+
   if (!list.length) {
     return message(
-      scope === 'stale'
+      (scope === 'stale'
         ? `范围内的 ${ranked.length} 个地址都已包含最新结算周${settled ? `（第 ${settled} 周）` : ''}，没有需要更新的地址。`
-        : `范围内的 ${ranked.length} 个地址都已查询成功；要重查请用“重新查询全部地址”。`
+        : `范围内的 ${ranked.length} 个地址都已查询成功且字段齐全；要重查请用“重新查询全部地址”。`) + scopeNote
     );
   }
 
@@ -1783,7 +1827,7 @@ async function query(scope, signal) {
   const crashed = results.find(r => r.status === 'rejected');
   if (crashed) throw crashed.reason;
 
-  message(`本轮查询结束：成功 ${done - failures} 个，失败 ${failures} 个。切换周或榜单无需重新查询。`);
+  message(`本轮查询结束：成功 ${done - failures} 个，失败 ${failures} 个。切换周或榜单无需重新查询。${scopeNote}`);
 }
 
 /* ---------- 导入导出 ---------- */
@@ -2022,6 +2066,27 @@ $('feeMul').onchange = () => {
   touch(); // 历史周概览里的手续费合计按折扣缓存，改折扣后重算。
   render();
 };
+
+// 查询设置（勾选框与数字输入）记在本浏览器里，刷新后不再回到默认值：
+// 否则“只查总榜前 N 名”每次刷新都重新勾上，手动导入的地址会被所有查询按钮跳过而没人察觉。
+const SETTING_IDS = ['topOnly', 'queryPnl', 'queryFunds', 'settled', 'concurrency', 'interval', 'targetCount', 'maxPages'];
+const SETTING_PREFIX = 'predict-weekly-vercel.ui.';
+
+for (const id of SETTING_IDS) {
+  const el = $(id);
+
+  try {
+    const saved = localStorage.getItem(SETTING_PREFIX + id);
+    if (saved !== null) {
+      if (el.type === 'checkbox') el.checked = saved === '1';
+      else if (saved.trim() !== '' && Number.isFinite(Number(saved))) el.value = saved;
+    }
+  } catch {}
+
+  el.addEventListener('change', () => {
+    try { localStorage.setItem(SETTING_PREFIX + id, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value); } catch {}
+  });
+}
 
 let searchTimer = 0;
 

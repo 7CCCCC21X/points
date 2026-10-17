@@ -160,3 +160,6 @@ details.card summary{cursor:pointer;font-weight:600;font-size:16px}
   .actions button{flex:1}
   #pageInfo{font-size:12px}
 }
+
+/* “—”且有原因说明的单元格：虚线提示可悬停 */
+td.why{cursor:help;text-decoration:underline dotted;text-underline-offset:3px}
